@@ -1,0 +1,267 @@
+@import '@catppuccin/palette/css/catppuccin.css';
+
+
+html[data-theme="latte"] {
+  color-scheme: light;
+  --ctp-base: var(--ctp-latte-base);
+  --ctp-mantle: var(--ctp-latte-mantle);
+  --ctp-crust: var(--ctp-latte-crust);
+  --ctp-surface0: var(--ctp-latte-surface0);
+  --ctp-surface1: var(--ctp-latte-surface1);
+  --ctp-surface2: var(--ctp-latte-surface2);
+  --ctp-overlay0: var(--ctp-latte-overlay0);
+  --ctp-overlay1: var(--ctp-latte-overlay1);
+  --ctp-text: var(--ctp-latte-text);
+  --ctp-subtext0: var(--ctp-latte-subtext0);
+  --ctp-subtext1: var(--ctp-latte-subtext1);
+  --ctp-green: var(--ctp-latte-green);
+  --ctp-blue: var(--ctp-latte-blue);
+  --ctp-mauve: var(--ctp-latte-mauve);
+  --ctp-red: var(--ctp-latte-red);
+  --ctp-yellow: var(--ctp-latte-yellow);
+}
+
+html[data-theme="frappe"] {
+  color-scheme: dark;
+  --ctp-base: var(--ctp-frappe-base);
+  --ctp-mantle: var(--ctp-frappe-mantle);
+  --ctp-crust: var(--ctp-frappe-crust);
+  --ctp-surface0: var(--ctp-frappe-surface0);
+  --ctp-surface1: var(--ctp-frappe-surface1);
+  --ctp-surface2: var(--ctp-frappe-surface2);
+  --ctp-overlay0: var(--ctp-frappe-overlay0);
+  --ctp-overlay1: var(--ctp-frappe-overlay1);
+  --ctp-text: var(--ctp-frappe-text);
+  --ctp-subtext0: var(--ctp-frappe-subtext0);
+  --ctp-subtext1: var(--ctp-frappe-subtext1);
+  --ctp-green: var(--ctp-frappe-green);
+  --ctp-blue: var(--ctp-frappe-blue);
+  --ctp-mauve: var(--ctp-frappe-mauve);
+  --ctp-red: var(--ctp-frappe-red);
+  --ctp-yellow: var(--ctp-frappe-yellow);
+}
+
+html[data-theme="macchiato"] {
+  color-scheme: dark;
+  --ctp-base: var(--ctp-macchiato-base);
+  --ctp-mantle: var(--ctp-macchiato-mantle);
+  --ctp-crust: var(--ctp-macchiato-crust);
+  --ctp-surface0: var(--ctp-macchiato-surface0);
+  --ctp-surface1: var(--ctp-macchiato-surface1);
+  --ctp-surface2: var(--ctp-macchiato-surface2);
+  --ctp-overlay0: var(--ctp-macchiato-overlay0);
+  --ctp-overlay1: var(--ctp-macchiato-overlay1);
+  --ctp-text: var(--ctp-macchiato-text);
+  --ctp-subtext0: var(--ctp-macchiato-subtext0);
+  --ctp-subtext1: var(--ctp-macchiato-subtext1);
+  --ctp-green: var(--ctp-macchiato-green);
+  --ctp-blue: var(--ctp-macchiato-blue);
+  --ctp-mauve: var(--ctp-macchiato-mauve);
+  --ctp-red: var(--ctp-macchiato-red);
+  --ctp-yellow: var(--ctp-macchiato-yellow);
+}
+
+html[data-theme="mocha"] {
+  color-scheme: dark;
+  --ctp-base: var(--ctp-mocha-base);
+  --ctp-mantle: var(--ctp-mocha-mantle);
+  --ctp-crust: var(--ctp-mocha-crust);
+  --ctp-surface0: var(--ctp-mocha-surface0);
+  --ctp-surface1: var(--ctp-mocha-surface1);
+  --ctp-surface2: var(--ctp-mocha-surface2);
+  --ctp-overlay0: var(--ctp-mocha-overlay0);
+  --ctp-overlay1: var(--ctp-mocha-overlay1);
+  --ctp-text: var(--ctp-mocha-text);
+  --ctp-subtext0: var(--ctp-mocha-subtext0);
+  --ctp-subtext1: var(--ctp-mocha-subtext1);
+  --ctp-green: var(--ctp-mocha-green);
+  --ctp-blue: var(--ctp-mocha-blue);
+  --ctp-mauve: var(--ctp-mocha-mauve);
+  --ctp-red: var(--ctp-mocha-red);
+  --ctp-yellow: var(--ctp-mocha-yellow);
+}
+html[data-theme] body,
+html[data-theme] .app-frame,
+html[data-theme] .main-area,
+html[data-theme] .content-wrap {
+  background: var(--ctp-base);
+  color: var(--ctp-text);
+}
+
+html[data-theme] .sidebar,
+html[data-theme] .topbar,
+html[data-theme] .panel,
+html[data-theme] .metric-card,
+html[data-theme] .manual-import-card,
+html[data-theme] .bulk-toolbar,
+html[data-theme] .source-split-panel,
+html[data-theme] .settings-fields input,
+html[data-theme] .settings-fields select,
+html[data-theme] .ui-input,
+html[data-theme] .ui-select,
+html[data-theme] .glossary-search {
+  background: var(--ctp-mantle);
+  color: var(--ctp-text);
+  border-color: var(--ctp-surface0);
+}
+
+html[data-theme] .nav-item.active { background: var(--ctp-surface0); color: var(--ctp-green); }
+html[data-theme] .nav-item:hover,
+html[data-theme] .muted-nav:hover { background: var(--ctp-surface0); color: var(--ctp-text); }
+html[data-theme] .brand,
+html[data-theme] .welcome-row h1,
+html[data-theme] .panel h2,
+html[data-theme] .metric-label,
+html[data-theme] .metric-value,
+html[data-theme] .settings-panel strong,
+html[data-theme] .manual-import-info strong,
+html[data-theme] .source-split-name strong { color: var(--ctp-text); }
+html[data-theme] .welcome-copy,
+html[data-theme] .section-subtitle,
+html[data-theme] .metric-foot,
+html[data-theme] .panel p,
+html[data-theme] .manual-grid-note,
+html[data-theme] .settings-panel small,
+html[data-theme] .source-split-name small,
+html[data-theme] .source-split-value small { color: var(--ctp-subtext0); }
+html[data-theme] .brand-light,
+html[data-theme] a,
+html[data-theme] .text-button { color: var(--ctp-blue); }
+html[data-theme] .privacy-card,
+html[data-theme] .insight-panel,
+html[data-theme] .allocation-empty,
+html[data-theme] .notice,
+html[data-theme] .model-status,
+html[data-theme] .news-card,
+html[data-theme] .news-ai-report { background: var(--ctp-surface0); border-color: var(--ctp-surface1); color: var(--ctp-text); }
+html[data-theme] .privacy-card strong,
+html[data-theme] .privacy-card p,
+html[data-theme] .insight-panel h2,
+html[data-theme] .insight-panel > p,
+html[data-theme] .model-status { color: var(--ctp-text); }
+html[data-theme] .button-primary,
+html[data-theme] .button-ai { background: var(--ctp-green); color: var(--ctp-crust); border-color: var(--ctp-green); }
+html[data-theme] .button-outline,
+html[data-theme] .button-quiet { background: transparent; color: var(--ctp-text); border-color: var(--ctp-surface2); }
+html[data-theme] .ui-table-head,
+html[data-theme] thead { background: var(--ctp-surface0); color: var(--ctp-subtext1); }
+html[data-theme] .ui-table-cell,
+html[data-theme] tbody td,
+html[data-theme] .activity-item,
+html[data-theme] .source-split-row,
+html[data-theme] .table-note,
+html[data-theme] .setting-row { border-color: var(--ctp-surface0); }
+html[data-theme] .ui-table-row:hover { background: var(--ctp-surface0); }
+html[data-theme] .ui-input:focus,
+html[data-theme] .ui-select:focus { outline-color: var(--ctp-green); }
+html[data-theme] .metric-icon.mint { background: var(--ctp-surface0); color: var(--ctp-green); }
+html[data-theme] .metric-icon.peach { background: var(--ctp-surface0); color: var(--ctp-mauve); }
+html[data-theme] .metric-icon.blue { background: var(--ctp-surface0); color: var(--ctp-blue); }
+html[data-theme] .status-pill.connected { background: var(--ctp-surface0); color: var(--ctp-green); }
+html[data-theme] .status-pill.partial,
+html[data-theme] .status-pill.stale,
+html[data-theme] .status-pill.reauth_required { background: var(--ctp-surface0); color: #f9e2af; }
+html[data-theme] .status-pill.invalid,
+html[data-theme] .status-pill.disconnected { background: var(--ctp-surface0); color: var(--ctp-red); }
+html[data-theme] .summary-warnings { background: var(--ctp-surface0); border-color: var(--ctp-surface1); color: #f9e2af; }
+html[data-theme] .notice { background: var(--ctp-surface0); color: var(--ctp-green); }
+html[data-theme] .metric-card,
+html[data-theme] .panel,
+html[data-theme] .settings-panel { box-shadow: 0 1px 2px rgb(0 0 0 / 8%); }
+
+/* Prefer the Catppuccin text/subtext tokens over the original light-only grays. */
+html[data-theme] :is(.workspace-label, .breadcrumb, .overline, .welcome-copy,
+  .section-subtitle, .metric-foot, .page-footer, .table-note, .manual-grid-note,
+  .source-item small, .source-item em, .news-card-meta, .news-card > small,
+  .empty-arrow, .ai-disclaimer, .settings-panel label, .settings-fields label,
+  .glossary-card p, .news-empty p) { color: var(--ctp-subtext1); }
+html[data-theme] :is(.nav-item, .muted-nav, .user-row, .user-text strong,
+  .user-text span, .icon-button, .local-pill, th, .table-empty, .table-empty strong,
+  .table-empty small, .allocation-empty strong, .allocation-empty p,
+  .allocation-label strong, .allocation-meta span, .allocation-meta small,
+  .source-item strong, .manual-price-cell, .manual-price-cell small,
+  .news-card h2, .news-card p, .news-report-stories, .glossary-card h2,
+  .notice, .notice-close, .settings-panel strong, .settings-panel small) {
+  color: var(--ctp-text);
+}
+html[data-theme] .welcome-row h1 em { color: var(--ctp-mauve); }
+html[data-theme] .brand-mark,
+html[data-theme] .avatar,
+html[data-theme] .nav-soon,
+html[data-theme] .metric-icon,
+html[data-theme] .empty-icon,
+html[data-theme] .ai-mark { background: var(--ctp-surface0); color: var(--ctp-text); }
+html[data-theme] .nav-soon { border: 1px solid var(--ctp-surface1); }
+html[data-theme] .allocation-row,
+html[data-theme] .source-item,
+html[data-theme] .table-empty,
+html[data-theme] .model-status,
+html[data-theme] .manual-grid tbody tr,
+html[data-theme] .news-report-stories article,
+html[data-theme] .glossary-search { background: var(--ctp-mantle); }
+html[data-theme] .donut { background: conic-gradient(var(--ctp-green) 0deg 128deg, var(--ctp-blue) 128deg 240deg, var(--ctp-mauve) 240deg 360deg); }
+html[data-theme] .donut:after { background: var(--ctp-mantle); }
+html[data-theme] .insight-panel:after { background: var(--ctp-surface1); }
+html[data-theme] .button-primary,
+html[data-theme] .button-ai { box-shadow: none; }
+html[data-theme="latte"] .button-primary,
+html[data-theme="latte"] .button-ai { background: var(--ctp-blue); color: #fff; border-color: var(--ctp-blue); }
+html[data-theme] .status-pill.partial,
+html[data-theme] .status-pill.stale,
+html[data-theme] .status-pill.reauth_required,
+html[data-theme] .status-pill.invalid,
+html[data-theme] .status-pill.disconnected { color: var(--ctp-text); border: 1px solid var(--ctp-surface2); }
+html[data-theme] :is(button, a, input, select):focus-visible { outline: 3px solid var(--ctp-blue); outline-offset: 3px; }
+html[data-theme] .topbar { gap: 14px; }
+html[data-theme] .breadcrumb span:first-child,
+html[data-theme] .breadcrumb strong { color: var(--ctp-subtext1); }
+html[data-theme] .breadcrumb .slash { color: var(--ctp-overlay1); }
+html[data-theme] .local-pill { background: var(--ctp-surface0); border-color: var(--ctp-surface1); }
+html[data-theme] .icon-button:hover { background: var(--ctp-surface0); color: var(--ctp-text); }
+html[data-theme] .summary-warnings { color: var(--ctp-text); }
+html[data-theme] .notice { border-color: var(--ctp-surface2); }
+html[data-theme] .panel p,
+html[data-theme] .source-split-name small,
+html[data-theme] .source-split-value small { color: var(--ctp-subtext1); }
+html[data-theme] .news-card p,
+html[data-theme] .news-card-meta,
+html[data-theme] .news-card-meta span:first-child,
+html[data-theme] .news-card > small,
+html[data-theme] .news-ai-report p,
+html[data-theme] .news-report-stories { color: var(--ctp-text); }
+html[data-theme] .ui-table-head,
+html[data-theme] thead,
+html[data-theme] th { color: var(--ctp-text); }
+html[data-theme] .brand-light,
+html[data-theme] .text-button { color: var(--ctp-text); }
+html[data-theme] .brand { text-decoration: none; }
+html[data-theme] .nav-item.active { color: var(--ctp-text); box-shadow: inset 3px 0 var(--ctp-blue); }
+html[data-theme] .metric-icon { color: var(--ctp-text); }
+html[data-theme] .status-pill.connected { color: var(--ctp-text); }
+html[data-theme] .source-split-empty,
+html[data-theme] .privacy-icon,
+html[data-theme] .ai-local,
+html[data-theme] .model-dot { color: var(--ctp-text); }
+html[data-theme] .ai-progress-label { color: var(--ctp-text); }
+html[data-theme] .ai-progress .ui-progress { background: var(--ctp-surface1); }
+html[data-theme] .ui-progress-indicator { background: var(--ctp-blue); }
+html[data-theme] .top-theme-control { color: var(--ctp-text); }
+html[data-theme] .top-theme-control .ui-select { background: var(--ctp-mantle); color: var(--ctp-text); border-color: var(--ctp-surface1); }
+html[data-theme] .top-theme-control .ui-select option,
+html[data-theme] .top-theme-control .ui-select optgroup { background: var(--ctp-mantle); color: var(--ctp-text); }
+html[data-theme] input::placeholder { color: var(--ctp-subtext1); opacity: 1; }
+html[data-theme] ::selection { background: var(--ctp-blue); color: var(--ctp-base); }
+html[data-theme] a:not(.brand) { color: var(--ctp-text); text-decoration: underline; text-underline-offset: 3px; }
+html[data-theme] .legend-row { color: var(--ctp-subtext1); }
+html[data-theme] .manual-empty { color: var(--ctp-subtext1) !important; }
+html[data-theme] .danger-button { color: var(--ctp-text) !important; border-color: var(--ctp-red) !important; }
+html[data-theme] .unsaved-indicator { color: var(--ctp-text); border-left: 3px solid var(--ctp-yellow); padding-left: 8px; }
+html[data-theme] .status-pill.partial,
+html[data-theme] .status-pill.stale,
+html[data-theme] .status-pill.reauth_required,
+html[data-theme] .summary-warnings { border-color: var(--ctp-yellow); }
+html[data-theme] .status-pill.connected { border-color: var(--ctp-surface2); }
+
+@media (prefers-reduced-motion: no-preference) {
+  html[data-theme] body { transition: background-color 140ms ease, color 140ms ease; }
+}

@@ -4,9 +4,9 @@ A local-first, read-only portfolio dashboard. Zerodha Kite Connect Personal prov
 
 ## Current state
 
-The repository has a React dashboard, FastAPI API, SQLite storage, read-only Kite portfolio sync, a separate editable manual-position ledger, CSV import/export and bulk edits, portfolio summary/holdings/SIP/source/export endpoints, import preview/commit endpoints, and a Streamlit token setup UI. Settings include manual-import visibility, Zerodha refresh behavior, local Ollama endpoint/model, and optional Yahoo daily-close refresh. The UI also includes a source split, glossary, source activity, and local AI portfolio review. Syncs preserve the last good snapshot on errors and prices show their source/date.
+The repository has a React dashboard, FastAPI API, SQLite storage, read-only Kite portfolio sync, a separate editable manual-position ledger, CSV import/export and bulk edits, portfolio summary/holdings/SIP/source/export endpoints, import preview/commit endpoints, and a Streamlit token setup UI. Settings include manual-import visibility, Catppuccin theme, Zerodha refresh behavior, local Ollama endpoint/model, and optional Yahoo price/news refresh. The UI also includes a source split, glossary, source activity, local AI portfolio review, and a portfolio news digest that can be summarized by the configured local model. Curated market RSS and Yahoo portfolio headlines are cached in SQLite with source-level refresh timing. AI reports are saved locally, browsable, and exportable as Markdown. Portfolio reports include a clearly labeled equal-weight rebalancing scenario with calculated unit counts when prices are recent enough. Yahoo access remains manually triggered and gated by saved preferences; RSS is independently enabled in Settings.
 
-See the [detailed project plan](docs/project-plan.md) for the revised roadmap and [market-data source assessment](docs/market-data-sources.md) for the Personal/Yahoo distinction and data terms.
+See the [detailed project plan](docs/project-plan.md) for the revised roadmap, [market-data source assessment](docs/market-data-sources.md) for the Personal/Yahoo distinction and data terms, and [news and AI reports](docs/news-and-ai.md) for RSS sources, SQLite caching, and report behavior.
 
 For the separate non-Zerodha portfolio grid and CSV format, see the [manual portfolio editor guide](docs/manual-portfolio-editor.md).
 
@@ -90,7 +90,7 @@ Use Zerodha as the source of what you own. Valuation initially uses Kite's `last
 
 ## Local model options
 
-See [infra/llm-profiles.md](infra/llm-profiles.md) for Ollama setup. Gemma 4 presets are available in Settings; choose a model that fits your memory. AI review is off by default and sends the holdings snapshot only to the configured local Ollama endpoint. No brokerage data should be sent to a hosted LLM.
+See [infra/llm-profiles.md](infra/llm-profiles.md) for Ollama setup. Gemma 4 presets are available in Settings; choose a model that fits your memory. AI review is off by default and sends the holdings snapshot and saved news context only to the configured local Ollama endpoint when requested. The response is rendered as Markdown in the dashboard. No brokerage data should be sent to a hosted LLM.
 
 ## Common commands
 

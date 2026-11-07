@@ -109,12 +109,17 @@ class ImportCommitResult(BaseModel):
 class Preferences(BaseModel):
     show_manual_imports: bool = True
     auto_sync_zerodha: bool = True
+    theme: Literal["latte", "frappe", "macchiato", "mocha"] = "latte"
     ollama_enabled: bool = False
     ollama_endpoint: str = "http://127.0.0.1:11434"
     ollama_model: str = "gemma4:e2b"
     yfinance_sync_enabled: bool = False
     yahoo_terms_confirmed: bool = False
     auto_sync_yfinance: bool = False
+    yahoo_news_enabled: bool = False
+    rss_news_enabled: bool = False
+    news_lookback_hours: int = Field(default=24, ge=1, le=720)
+    news_max_articles: int = Field(default=30, ge=5, le=150)
 
 
 class ManualPositionInput(BaseModel):

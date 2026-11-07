@@ -68,7 +68,7 @@ Optional local Gemma analysis may summarize allocation, concentration, and chang
 | AI | Configurable local Ollama endpoint/model, installed-model discovery, grounded snapshot insight endpoint and UI | Review summary persistence/history, larger fixture/quality review |
 | Quality | API test cases exist for health, token status/save, imports, and summary | Run/expand checks for real adapters, storage security, calculations, and manual accessibility review |
 
-The dashboard syncs read-only Kite holdings, net positions, mutual-fund holdings, and SIP schedules through the backend and stores the latest successful snapshot locally. Token credentials use the local secret-store layer. SQLite preferences control manual-row visibility, Zerodha startup sync, local Ollama endpoint/model, and optional yfinance refresh. The separate manual portfolio editor stores non-Zerodha positions in its own SQLite table, supports CSV import/export, inline edits, and bulk source/market/type changes. Manual rows feed portfolio summaries, allocation, local AI analysis, and the homepage source split when manual visibility is enabled. Yahoo refresh remains off until enablement and permission acknowledgment are saved.
+The dashboard syncs read-only Kite holdings, net positions, mutual-fund holdings, and SIP schedules through the backend and stores the latest successful snapshot locally. Token credentials use the local secret-store layer. SQLite preferences control manual-row visibility, Catppuccin Latte/Frappé/Macchiato/Mocha theme, Zerodha startup sync, local Ollama endpoint/model, and optional yfinance price/news refresh. The separate manual portfolio editor stores non-Zerodha positions in its own SQLite table, supports CSV import/export, inline edits, and bulk source/market/type changes. Manual rows feed portfolio summaries, allocation, local AI analysis, and the homepage source split when manual visibility is enabled. Yahoo refresh remains off until enablement and permission acknowledgment are saved. Portfolio news is fetched on demand, cached in SQLite, and can be summarized as a separate report by the configured local Ollama model. React Router now maps each tab to its own URL, enabling direct links and browser back/forward navigation.
 
 ## 5. Source and pricing decisions
 
@@ -236,14 +236,16 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 
 - [ ] Add local-model health/configuration checks and distinguish “model offline” from “portfolio data unavailable.”
 - [ ] Support MLX on Apple silicon and Ollama Gemma 3 1B for an 8 GB starting profile; keep larger models optional with memory guidance.
-- [ ] Implement a provider adapter with timeouts, request bounds, and explicit local-only host validation by default.
-- [ ] Send only normalized fields relevant to the question; never send raw statements, API credentials, or unused profile/account fields.
-- [ ] Offer read-only summaries: allocation, concentration, data freshness, and changes between persisted snapshots.
-- [ ] Require structured results with facts vs interpretation, citations to holding/source dates, assumptions, and uncertainty.
-- [ ] Treat symbol names/imported free text as data rather than instructions; provide no order or SIP mutation tools.
-- [ ] Keep insights informational, non-prescriptive, and disabled when evidence/model is unavailable.
+- [x] Implement a provider adapter with timeouts, request bounds, and explicit local-only host validation by default.
+- [x] Send only normalized fields relevant to the question; never send raw statements, API credentials, or unused profile/account fields.
+- [x] Offer read-only summaries: allocation, concentration, data freshness, and changes between persisted snapshots.
+- [x] Return Markdown reports with portfolio/news themes, holding-level evidence, source dates, data gaps, and uncertainty; render safely in the UI.
+- [x] Treat symbol names/imported free text and article content as data rather than instructions; provide no order or SIP mutation tools.
+- [x] Keep insights informational and non-prescriptive; report when evidence or the selected model is unavailable.
 
 **Exit criteria:** Model requests stay on the configured local endpoint; claims map to source observations and dates; offline behavior is clear; no AI action can write to Zerodha.
+
+Portfolio headlines are sourced from optional Yahoo per-holding lookups and configurable-in-code public market RSS feeds. Refresh is manual, per-source cache timing and article retention are persisted in SQLite, and lookback/article limits are user preferences. Generated AI reports are saved in SQLite, browsable in the UI, and exportable as Markdown. Portfolio reports include an illustrative equal-weight comparison with calculated unit changes only for positions with a recent price; it is explicitly not a personalized target or order instruction. See [news-and-ai.md](news-and-ai.md) for source behavior and report format.
 
 ### Phase 7 — Hardening and release
 

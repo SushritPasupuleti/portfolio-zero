@@ -34,6 +34,10 @@ Kite's portfolio holdings response schema includes account quantities, average p
 
 Review the [`yfinance` README](https://github.com/ranaroussi/yfinance), its [download API reference](https://ranaroussi.github.io/yfinance/reference/api/yfinance.download.html), and Yahoo's current terms before enabling use. The app records the permission acknowledgment in local preferences but cannot determine whether a particular use is authorized. This review was made on **7 November 2026**.
 
+### Portfolio news
+
+The optional News & reports view uses the yfinance client's `Ticker.get_news()` for listed equities and `Search(..., news_count=...)` for named funds. These are unofficial client methods backed by Yahoo Finance endpoints, not a documented, official Yahoo News API or a licensed FOSS feed. Refresh is manual, off by default, and requires both the news toggle and the same Yahoo permission acknowledgment as price sync. The app caches the returned headlines locally and may send their titles, summaries, and URLs only to the configured local Ollama model when the user asks for a report. Yahoo's terms and the upstream client can change; no automated refresh runs by default.
+
 ## Pricing rules
 
 1. **Zerodha remains authoritative for what the user owns.** External prices never create or remove a portfolio row.

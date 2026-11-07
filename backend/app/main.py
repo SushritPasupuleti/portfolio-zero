@@ -3,7 +3,7 @@ import io
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from kiteconnect.exceptions import (
@@ -24,6 +24,7 @@ from .models import (
 )
 from .ollama_adapter import (
     OllamaUnavailable,
+    generate_news_report,
     generate_portfolio_insights,
     installed_models,
     validate_ollama_endpoint,
@@ -35,7 +36,9 @@ from .storage import (
     clear_local_data,
     delete_manual_positions,
     delete_zerodha_token,
+    get_ai_report,
     get_holdings,
+    get_news_articles,
     get_preferences,
     get_sips,
     get_sources,
@@ -43,14 +46,17 @@ from .storage import (
     import_manual_positions,
     initialize_db,
     insert_import_record,
+    list_ai_reports,
     list_manual_positions,
     persist_holdings,
     persist_sips,
+    save_ai_report,
     save_manual_positions,
     save_preferences,
     save_zerodha_token,
     upsert_source_status,
 )
+from .yahoo_news_adapter import NEWS_SOURCE_TYPE, sync_portfolio_news
 from .yfinance_adapter import sync_daily_prices
 
 
@@ -202,15 +208,106 @@ def portfolio_recommendations() -> dict[str, object]:
         )
     holdings = get_holdings(include_manual=preferences.show_manual_imports)
     try:
-        return generate_portfolio_insights(
+        report = generate_portfolio_insights(
             preferences.ollama_endpoint,
             preferences.ollama_model,
             holdings,
+            get_news_articles(
+                preferences.news_lookback_hours,
+                preferences.news_max_articles,
+            ),
         )
+        saved = save_ai_report(
+            "portfolio", str(report["model"]), str(report["markdown"]),
+            report.get("generated_at") if isinstance(report.get("generated_at"), str) else None,
+            str(report["scope"]),
+        )
+        return {**report, **saved}
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OllamaUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/ai/news-report")
+def ai_news_report() -> dict[str, object]:
+    preferences = get_preferences()
+    if not preferences.ollama_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail="Enable local AI insights in Settings before generating a news report.",
+        )
+    try:
+        report = generate_news_report(
+            preferences.ollama_endpoint,
+            preferences.ollama_model,
+            get_news_articles(
+                preferences.news_lookback_hours,
+                preferences.news_max_articles,
+            ),
+        )
+        saved = save_ai_report(
+            "news", str(report["model"]), str(report["markdown"]),
+            report.get("generated_at") if isinstance(report.get("generated_at"), str) else None,
+            str(report["scope"]),
+        )
+        return {**report, **saved}
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OllamaUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/ai/reports")
+def ai_reports(
+    report_type: str | None = Query(default=None, pattern="^(portfolio|news)$"),
+    limit: int = Query(default=100, ge=1, le=250),
+) -> dict[str, object]:
+    return {"items": list_ai_reports(report_type=report_type, limit=limit)}
+
+
+@app.get("/api/ai/reports/{report_id}")
+def ai_report(report_id: str) -> dict[str, object]:
+    report = get_ai_report(report_id)
+    if not report:
+        raise HTTPException(status_code=404, detail="Saved AI report was not found.")
+    return report
+
+
+@app.get("/api/news")
+def portfolio_news() -> dict[str, object]:
+    preferences = get_preferences()
+    return {
+        "items": get_news_articles(
+            preferences.news_lookback_hours,
+            preferences.news_max_articles,
+        )
+    }
+
+
+@app.post("/api/news/sync")
+def refresh_portfolio_news() -> dict[str, object]:
+    preferences = get_preferences()
+    include_yahoo = preferences.yahoo_news_enabled and preferences.yahoo_terms_confirmed
+    if not preferences.rss_news_enabled and not include_yahoo:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Enable market RSS news or enable Yahoo portfolio news and confirm its "
+                "permitted access in Settings before refreshing headlines."
+            ),
+        )
+    try:
+        result = sync_portfolio_news(
+            preferences.show_manual_imports,
+            include_yahoo=include_yahoo,
+            include_rss=preferences.rss_news_enabled,
+            lookback_hours=preferences.news_lookback_hours,
+            max_articles=preferences.news_max_articles,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {**result, "source_type": NEWS_SOURCE_TYPE}
 
 
 @app.post("/api/market-data/sync")

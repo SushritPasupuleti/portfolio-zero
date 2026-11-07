@@ -1,20 +1,24 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { createBrowserRouter, Navigate, RouterProvider, useBlocker, useLocation, useNavigate } from 'react-router';
 import {
   Activity, ArrowDownLeft, ArrowUpRight, BookOpen, Bot, BriefcaseBusiness,
-  ChartNoAxesCombined, Check, ChevronDown, CircleHelp, Download, FileUp, Grid2X2,
-  Landmark, LayoutDashboard, Menu, Plus, RefreshCw, Search, Server, Settings2,
+  ChartNoAxesCombined, Check, ChevronDown, CircleHelp, Download, Grid2X2,
+  ExternalLink, Landmark, LayoutDashboard, Menu, Newspaper, Palette, Plus, RefreshCw, Search, Server, Settings2,
   ShieldCheck, Trash2, Upload, WalletCards,
 } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
 import { Input } from './components/ui/input';
+import { Markdown } from './components/ui/markdown';
+import { Progress } from './components/ui/progress';
 import { Select } from './components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
 import './style.css';
+import './theme.css';
 
 type Health = 'checking' | 'connected' | 'unavailable';
-type Section = 'Overview' | 'Holdings' | 'Manual portfolio' | 'Activity' | 'AI insights' | 'Glossary' | 'Settings';
+type Section = 'Overview' | 'Holdings' | 'Manual portfolio' | 'News & reports' | 'Activity' | 'AI insights' | 'Glossary' | 'Settings';
 
 type ManualPosition = {
   id: string;
@@ -34,20 +38,63 @@ type ManualPosition = {
 type Preferences = {
   show_manual_imports: boolean;
   auto_sync_zerodha: boolean;
+  theme: 'latte' | 'frappe' | 'macchiato' | 'mocha';
   ollama_enabled: boolean;
   ollama_endpoint: string;
   ollama_model: string;
   yfinance_sync_enabled: boolean;
   yahoo_terms_confirmed: boolean;
   auto_sync_yfinance: boolean;
+  yahoo_news_enabled: boolean;
+  rss_news_enabled: boolean;
+  news_lookback_hours: number;
+  news_max_articles: number;
 };
 
-type AIReview = {
-  summary: string;
-  insights: { title: string; detail: string; evidence: string; type: string }[];
+type NewsItem = {
+  id: string;
+  ticker: string;
+  instrument_name: string;
+  asset_type: string;
+  related_tickers: string[];
+  source_key: string;
+  title: string;
+  publisher: string | null;
+  summary: string | null;
+  url: string | null;
+  published_at: string | null;
+  fetched_at: string;
+};
+
+type AIReport = {
+  report_id: string;
+  report_type: 'portfolio' | 'news';
+  markdown: string;
   model: string;
   generated_at: string | null;
+  saved_at: string;
   scope: string;
+};
+
+type AIReportSummary = Omit<AIReport, 'markdown'>;
+
+type ReportType = AIReport['report_type'];
+
+function reportTypeLabel(type: ReportType): string {
+  return type === 'portfolio' ? 'Portfolio review' : 'News report';
+}
+
+function exportMarkdownReport(report: AIReport) {
+  const blob = new Blob([report.markdown], { type: 'text/markdown;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  const date = new Date(report.saved_at).toISOString().slice(0, 10);
+  anchor.href = url;
+  anchor.download = `portfolio-${report.report_type}-report-${date}.md`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
 };
 
 type PortfolioSummary = {
@@ -118,11 +165,27 @@ const navigation: { label: Section; icon: typeof LayoutDashboard }[] = [
   { label: 'Overview', icon: LayoutDashboard },
   { label: 'Holdings', icon: BriefcaseBusiness },
   { label: 'Manual portfolio', icon: Grid2X2 },
+  { label: 'News & reports', icon: Newspaper },
   { label: 'Activity', icon: Activity },
   { label: 'AI insights', icon: Bot },
   { label: 'Glossary', icon: BookOpen },
   { label: 'Settings', icon: Settings2 },
 ];
+
+const sectionPaths: Record<Section, string> = {
+  Overview: '/',
+  Holdings: '/holdings',
+  'Manual portfolio': '/manual-portfolio',
+  'News & reports': '/news',
+  Activity: '/activity',
+  'AI insights': '/ai-insights',
+  Glossary: '/glossary',
+  Settings: '/settings',
+};
+
+function sectionFromPath(pathname: string): Section {
+  return navigation.find(({ label }) => sectionPaths[label] === pathname)?.label ?? 'Overview';
+}
 
 const ollamaEndpoints = [
   { label: 'Local Ollama on this machine', value: 'http://127.0.0.1:11434' },
@@ -134,6 +197,13 @@ const modelPresets = [
   { name: 'gemma4:26b-a4b', description: 'Gemma 4 26B A4B MoE · 16–19 GB · high-capability' },
   { name: 'gemma4:e2b', description: 'Gemma 4 E2B · 4.6–7.5 GB · constrained local systems' },
   { name: 'gemma4:e4b', description: 'Gemma 4 E4B · 6.6–9.5 GB · modest local systems' },
+];
+
+const themes: { value: Preferences['theme']; label: string; appearance: string; mode: 'light' | 'dark' }[] = [
+  { value: 'latte', label: 'Latte', appearance: 'Light', mode: 'light' },
+  { value: 'frappe', label: 'Frappé', appearance: 'Soft dark', mode: 'dark' },
+  { value: 'macchiato', label: 'Macchiato', appearance: 'Medium dark', mode: 'dark' },
+  { value: 'mocha', label: 'Mocha', appearance: 'Deep dark', mode: 'dark' },
 ];
 
 const glossaryTerms = [
@@ -152,8 +222,10 @@ const glossaryTerms = [
 ];
 
 function App() {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [apiHealth, setApiHealth] = useState<Health>('checking');
-  const [activeSection, setActiveSection] = useState<Section>('Overview');
+  const activeSection = sectionFromPath(location.pathname);
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState('');
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
@@ -163,11 +235,19 @@ function App() {
   const [sources, setSources] = useState<SourceStatusItem[]>([]);
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
   const [preferences, setPreferences] = useState<Preferences | null>(null);
+  const [themeSaving, setThemeSaving] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<{ name: string; size: string | null }[]>([]);
   const [modelStatus, setModelStatus] = useState('');
-  const [aiReview, setAiReview] = useState<AIReview | null>(null);
+  const [aiReview, setAiReview] = useState<AIReport | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
+  const [newsReport, setNewsReport] = useState<AIReport | null>(null);
+  const [reportArchive, setReportArchive] = useState<AIReportSummary[]>([]);
+  const [selectedSavedReport, setSelectedSavedReport] = useState<AIReport | null>(null);
+  const [reportArchiveLoading, setReportArchiveLoading] = useState(false);
+  const [newsLoading, setNewsLoading] = useState(false);
+  const [newsReportLoading, setNewsReportLoading] = useState(false);
   const [glossarySearch, setGlossarySearch] = useState('');
   const [manualPositions, setManualPositions] = useState<ManualPosition[]>([]);
   const [selectedManualIds, setSelectedManualIds] = useState<string[]>([]);
@@ -177,6 +257,11 @@ function App() {
   const [csvMode, setCsvMode] = useState<'append' | 'replace'>('append');
   const [manualBusy, setManualBusy] = useState(false);
   const [manualDirty, setManualDirty] = useState(false);
+  const navigationBlocker = useBlocker(({ currentLocation, nextLocation }) =>
+    activeSection === 'Manual portfolio'
+      && manualDirty
+      && currentLocation.pathname !== nextLocation.pathname,
+  );
   const today = new Intl.DateTimeFormat('en-IN', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
   }).format(new Date()).toUpperCase();
@@ -225,7 +310,31 @@ function App() {
 
   const updatePreference = <K extends keyof Preferences>(key: K, value: Preferences[K]) => {
     setPreferences((current) => current ? { ...current, [key]: value } : current);
+    if (key === 'theme') document.documentElement.dataset.theme = String(value);
   };
+
+  async function saveThemePreference(theme: Preferences['theme']) {
+    const previousTheme = preferences?.theme ?? 'latte';
+    updatePreference('theme', theme);
+    setThemeSaving(true);
+    try {
+      const response = await fetch('/api/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ theme }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Theme could not be saved.');
+      setPreferences(current => current ? { ...current, theme } : payload as Preferences);
+      setNotice(`${themes.find(item => item.value === theme)?.label ?? theme} theme saved.`);
+    } catch (error) {
+      document.documentElement.dataset.theme = previousTheme;
+      setPreferences(current => current ? { ...current, theme: previousTheme } : current);
+      setNotice(error instanceof Error ? error.message : 'Theme could not be saved.');
+    } finally {
+      setThemeSaving(false);
+    }
+  }
 
   async function loadSummary() {
     try {
@@ -554,7 +663,9 @@ function App() {
       const response = await fetch('/api/ai/recommendations', { method: 'POST' });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || 'Local portfolio review failed.');
-      setAiReview(payload as AIReview);
+      setAiReview(payload as AIReport);
+      setSelectedSavedReport(null);
+      await loadReportArchive('portfolio');
       setNotice('Local portfolio review generated.');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Local portfolio review failed.');
@@ -563,65 +674,107 @@ function App() {
     }
   }
 
-  async function loadSamplePortfolio() {
-    const payload = {
-      source_type: 'manual-import',
-      rows: [
-        {
-          id: 'sample-1',
-          instrument_name: 'Reliance Industries',
-          asset_class: 'equity',
-          symbol: 'RELIANCE',
-          quantity: 10,
-          average_cost: 2500,
-          last_price: 2900,
-          value: 29000,
-          pnl: 4000,
-          currency: 'INR',
-          as_of: new Date().toISOString(),
-        },
-        {
-          id: 'sample-2',
-          instrument_name: 'HDFC Bank',
-          asset_class: 'equity',
-          symbol: 'HDFCBANK',
-          quantity: 12,
-          average_cost: 1600,
-          last_price: 1700,
-          value: 20400,
-          pnl: 1200,
-          currency: 'INR',
-          as_of: new Date().toISOString(),
-        },
-      ],
-    };
-
-    setNotice('Loading a local sample portfolio so the dashboard has visible data while the live broker sync is implemented.');
+  async function loadReportArchive(type: ReportType) {
+    setReportArchiveLoading(true);
     try {
-      const response = await fetch('/api/import/commit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!response.ok) throw new Error('Failed to import sample data');
-      await Promise.all([loadSummary(), loadPortfolioData()]);
-      setNotice('Sample portfolio loaded. You can now view holdings, allocation, and source data.');
-    } catch {
-      setNotice('The local import endpoint could not load the sample portfolio. Check the API server and try again.');
+      const response = await fetch(`/api/ai/reports?report_type=${type}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Saved reports could not be loaded.');
+      setReportArchive((payload.items ?? []) as AIReportSummary[]);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Saved reports could not be loaded.');
+    } finally {
+      setReportArchiveLoading(false);
+    }
+  }
+
+  async function openSavedReport(reportId: string) {
+    try {
+      const response = await fetch(`/api/ai/reports/${encodeURIComponent(reportId)}`);
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Saved report could not be opened.');
+      setSelectedSavedReport(payload as AIReport);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Saved report could not be opened.');
+    }
+  }
+
+  async function loadPortfolioNews() {
+    try {
+      const response = await fetch('/api/news');
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Saved news could not be loaded.');
+      setNewsItems((payload.items ?? []) as NewsItem[]);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Saved news could not be loaded.');
+    }
+  }
+
+  async function syncPortfolioNews() {
+    setNewsLoading(true);
+    try {
+      const response = await fetch('/api/news/sync', { method: 'POST' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Yahoo Finance news refresh failed.');
+      await loadPortfolioNews();
+      setNewsReport(null);
+      setNotice(payload.message || 'Portfolio news refreshed.');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Portfolio news refresh failed.');
+    } finally {
+      setNewsLoading(false);
+    }
+  }
+
+  async function generateAINewsReport() {
+    setNewsReportLoading(true);
+    try {
+      const response = await fetch('/api/ai/news-report', { method: 'POST' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'News report generation failed.');
+      setNewsReport(payload as AIReport);
+      setSelectedSavedReport(null);
+      await loadReportArchive('news');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'News report generation failed.');
+    } finally {
+      setNewsReportLoading(false);
     }
   }
 
   useEffect(() => { void syncPortfolio(false); }, []);
+  useEffect(() => {
+    if (preferences?.theme) document.documentElement.dataset.theme = preferences.theme;
+  }, [preferences?.theme]);
+  useEffect(() => {
+    if (activeSection === 'Settings' && !preferences) void loadPreferences();
+    if (activeSection === 'Manual portfolio') void loadManualPortfolio();
+    if (activeSection === 'News & reports') void loadPortfolioNews();
+    if (activeSection === 'AI insights') void loadReportArchive('portfolio');
+    if (activeSection === 'News & reports') void loadReportArchive('news');
+  }, [activeSection]);
+  useEffect(() => {
+    if (navigationBlocker.state !== 'blocked') return;
+    if (window.confirm('Discard unsaved manual portfolio edits and leave this view?')) {
+      navigationBlocker.proceed();
+    } else {
+      navigationBlocker.reset();
+    }
+  }, [navigationBlocker.state]);
 
   const openSection = (section: Section) => {
     if (activeSection === section) return;
-    if (activeSection === 'Manual portfolio' && section !== 'Manual portfolio' && manualDirty
-      && !window.confirm('Discard unsaved manual portfolio edits and leave this view?')) return;
-    setActiveSection(section);
+    navigate(sectionPaths[section]);
     setNotice('');
-    if (section === 'Settings' && !preferences) void loadPreferences();
-    if (section === 'Manual portfolio') void loadManualPortfolio();
   };
+
+  function renderReportArchive(type: ReportType) {
+    return <section className="panel report-archive">
+      <div className="panel-heading"><div><h2>Saved {type === 'portfolio' ? 'portfolio reviews' : 'news reports'}</h2><p className="section-subtitle">Generated reports are stored locally in SQLite.</p></div><Button variant="outline" disabled={reportArchiveLoading} onClick={() => void loadReportArchive(type)}><RefreshCw size={14} className={reportArchiveLoading ? 'spin' : ''}/> Refresh</Button></div>
+      {reportArchive.length === 0 ? <p className="report-archive-empty">{reportArchiveLoading ? 'Loading saved reports…' : 'No saved reports yet. Generate a report to start your history.'}</p> : <div className="report-archive-list">{reportArchive.map(report => <button key={report.report_id} className={`report-archive-item ${selectedSavedReport?.report_id === report.report_id ? 'selected' : ''}`} onClick={() => void openSavedReport(report.report_id)}><span><strong>{reportTypeLabel(report.report_type)}</strong><small>{formatDate(report.saved_at)} · {report.model}</small></span><span className="report-open-label">Open report <ArrowUpRight size={14}/></span></button>)}</div>}
+      {selectedSavedReport?.report_type === type && <article className="saved-report-view"><div className="panel-heading"><div><h3>{reportTypeLabel(type)} · {selectedSavedReport.model}</h3><p className="section-subtitle">Saved {formatDate(selectedSavedReport.saved_at)} · {selectedSavedReport.scope}</p></div><Button variant="outline" onClick={() => exportMarkdownReport(selectedSavedReport)}><Download size={14}/> Export Markdown</Button></div><Markdown source={selectedSavedReport.markdown}/></article>}
+    </section>;
+  }
 
   return (
     <div className="app-frame">
@@ -652,7 +805,11 @@ function App() {
         <header className="topbar">
           <button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setNotice('Use the sidebar navigation to switch sections.')}><Menu size={19} /></button>
           <div className="breadcrumb"><span>Workspace</span><span className="slash">/</span><strong>{activeSection}</strong></div>
-          <div className="top-actions"><span className="local-pill"><span className={`status-dot ${apiHealth}`} />LOCAL MODE</span><button className="icon-button" aria-label="Open settings" onClick={() => openSection('Settings')}><Settings2 size={18} /></button></div>
+          <div className="top-actions">
+            {(aiLoading || newsReportLoading) && <div className="ai-progress" role="status" aria-live="polite" aria-atomic="true"><span className="ai-progress-label">{newsReportLoading ? 'Writing news report' : 'Reviewing portfolio'}</span><Progress label={newsReportLoading ? 'Writing a local AI news report' : 'Generating a local portfolio review'} /></div>}
+            <label className="top-theme-control"><Palette size={15} aria-hidden="true"/><Select aria-label="Color theme" value={preferences?.theme ?? 'latte'} disabled={!preferences || themeSaving} onChange={event => void saveThemePreference(event.target.value as Preferences['theme'])}><optgroup label="Light themes">{themes.filter(theme => theme.mode === 'light').map(theme => <option key={theme.value} value={theme.value}>{theme.label}</option>)}</optgroup><optgroup label="Dark themes">{themes.filter(theme => theme.mode === 'dark').map(theme => <option key={theme.value} value={theme.value}>{theme.label}</option>)}</optgroup></Select></label>
+            <span className="local-pill"><span className={`status-dot ${apiHealth}`} />LOCAL MODE</span><button className="icon-button" aria-label="Open settings" onClick={() => openSection('Settings')}><Settings2 size={18} /></button>
+          </div>
         </header>
 
         <div className="content-wrap">
@@ -680,11 +837,12 @@ function App() {
             </section>
           </section>}
           {activeSection === 'Settings' && <section className="settings-page">
-            <div className="welcome-row"><div><p className="overline">LOCAL PREFERENCES</p><h1>Make it <em>yours.</em></h1><p className="welcome-copy">Saved in this app’s SQLite database on your device.</p></div><Button onClick={() => void saveSettings()} disabled={!preferences || settingsSaving}>{settingsSaving ? 'Saving…' : 'Save preferences'}</Button></div>
+            <div className="welcome-row"><div><p className="overline">LOCAL PREFERENCES</p><h1>Make it <em>yours.</em></h1><p className="welcome-copy">Saved in this app’s SQLite database on your device.</p></div><Button onClick={() => void saveSettings()} disabled={!preferences || settingsSaving || themeSaving}>{settingsSaving ? 'Saving…' : 'Save preferences'}</Button></div>
             {!preferences ? <div className="panel">Loading saved preferences…</div> : <>
               <section className="panel settings-panel"><div className="panel-heading"><div><h2>Portfolio display & sync</h2><p className="section-subtitle">Choose what appears and which sources refresh.</p></div></div>
-                <label className="setting-row"><span><strong>Show manual imports</strong><small>Include CSV, manual, and sample rows in totals, holdings, and allocations.</small></span><input type="checkbox" checked={preferences.show_manual_imports} onChange={e => updatePreference('show_manual_imports', e.target.checked)} /></label>
+                <label className="setting-row"><span><strong>Show manual positions</strong><small>Include the separate manual ledger and CSV imports in totals, holdings, and allocations.</small></span><input type="checkbox" checked={preferences.show_manual_imports} onChange={e => updatePreference('show_manual_imports', e.target.checked)} /></label>
                 <label className="setting-row"><span><strong>Sync Zerodha on app open</strong><small>Fetch the latest read-only holdings and SIP snapshot when the dashboard opens.</small></span><input type="checkbox" checked={preferences.auto_sync_zerodha} onChange={e => updatePreference('auto_sync_zerodha', e.target.checked)} /></label>
+                <div className="theme-setting-row"><div><Palette size={17}/><span><strong>Theme</strong><small>Choose a light or dark Catppuccin flavor. It previews immediately and saves to SQLite.</small></span></div><div className="theme-control"><span className={`theme-swatch theme-${preferences.theme}`} aria-hidden="true">Aa</span><Select aria-label="Color theme" value={preferences.theme} disabled={themeSaving} onChange={event => void saveThemePreference(event.target.value as Preferences['theme'])}><optgroup label="Light themes">{themes.filter(theme => theme.mode === 'light').map(theme => <option key={theme.value} value={theme.value}>{theme.label} · {theme.appearance}</option>)}</optgroup><optgroup label="Dark themes">{themes.filter(theme => theme.mode === 'dark').map(theme => <option key={theme.value} value={theme.value}>{theme.label} · {theme.appearance}</option>)}</optgroup></Select></div></div>
               </section>
               <section className="panel settings-panel"><div className="panel-heading"><div><h2>Local AI with Ollama</h2><p className="section-subtitle">Requests stay on your configured local or private Ollama host.</p></div><Button variant="outline" onClick={() => void discoverOllamaModels()}><Server size={15}/> Find installed models</Button></div>
                 <label className="setting-row"><span><strong>Enable AI portfolio review</strong><small>Generate evidence-linked summaries. Output is informational and not financial advice.</small></span><input type="checkbox" checked={preferences.ollama_enabled} onChange={e => updatePreference('ollama_enabled', e.target.checked)} /></label>
@@ -694,18 +852,30 @@ function App() {
               </section>
               <section className="panel settings-panel"><div className="panel-heading"><div><h2>Yahoo Finance price sync</h2><p className="section-subtitle">Uses yfinance for daily equity closes. Yahoo access is subject to Yahoo’s terms.</p></div></div>
                 <label className="setting-row"><span><strong>Allow manual Yahoo price refresh</strong><small>Updates prices for Zerodha equity holdings when you press Sync prices.</small></span><input type="checkbox" checked={preferences.yfinance_sync_enabled} onChange={e => updatePreference('yfinance_sync_enabled', e.target.checked)} /></label>
-                <label className="setting-row"><span><strong>I have permission to retrieve Yahoo Finance data this way</strong><small>Automated collection may require prior permission. See <a href="https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html?ncid=mbr_idnedulnk00000001" target="_blank" rel="noreferrer">Yahoo terms</a>.</small></span><input type="checkbox" checked={preferences.yahoo_terms_confirmed} onChange={e => updatePreference('yahoo_terms_confirmed', e.target.checked)} /></label>
+                <label className="setting-row"><span><strong>I have permission to retrieve Yahoo Finance data this way</strong><small>Applies to both price and news refresh. Automated collection may require prior permission. See <a href="https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html?ncid=mbr_idnedulnk00000001" target="_blank" rel="noreferrer">Yahoo terms</a>.</small></span><input type="checkbox" checked={preferences.yahoo_terms_confirmed} onChange={e => updatePreference('yahoo_terms_confirmed', e.target.checked)} /></label>
                 <label className="setting-row"><span><strong>Refresh Yahoo prices on app open</strong><small>Runs only when price sync is enabled and the permission confirmation is saved.</small></span><input type="checkbox" checked={preferences.auto_sync_yfinance} onChange={e => updatePreference('auto_sync_yfinance', e.target.checked)} /></label>
+                <label className="setting-row"><span><strong>Enable Yahoo portfolio headlines</strong><small>Fetches holding-specific headlines through yfinance. This is an unofficial Yahoo client; enable only if your use is permitted.</small></span><input type="checkbox" checked={preferences.yahoo_news_enabled} onChange={e => updatePreference('yahoo_news_enabled', e.target.checked)} /></label>
+                <label className="setting-row"><span><strong>Enable market RSS sources</strong><small>Manually refreshes curated Economic Times, Moneycontrol, Business Standard, and Mint feeds. Results are matched to held names and tickers, with broad Indian-market stories retained for context.</small></span><input type="checkbox" checked={preferences.rss_news_enabled} onChange={e => updatePreference('rss_news_enabled', e.target.checked)} /></label>
+                <div className="settings-fields news-settings-fields"><label>Article lookback window<Select value={String(preferences.news_lookback_hours)} onChange={e => updatePreference('news_lookback_hours', Number(e.target.value))}><option value="24">Last 24 hours</option><option value="48">Last 48 hours</option><option value="72">Last 3 days</option><option value="168">Last week</option><option value="720">Last month</option></Select><small>Headlines outside this window are omitted from the page and AI context.</small></label><label>Maximum articles<Input type="number" min="5" max="150" step="5" value={preferences.news_max_articles} onChange={e => updatePreference('news_max_articles', Math.max(5, Math.min(150, Number(e.target.value) || 5)))}/><small>Limits news shown and sent to the local model.</small></label></div>
               </section>
             </>}
           </section>}
 
           {activeSection === 'Glossary' && <section><div className="welcome-row"><div><p className="overline">PLAIN LANGUAGE</p><h1>Portfolio <em>glossary.</em></h1><p className="welcome-copy">Short definitions for the numbers and terms in this dashboard.</p></div></div><label className="glossary-search"><Search size={17}/><input aria-label="Search glossary" placeholder="Search terms" value={glossarySearch} onChange={e => setGlossarySearch(e.target.value)}/></label><div className="glossary-grid">{filteredGlossary.map(item => <article className="panel glossary-card" key={item.term}><h2>{item.term}</h2><p>{item.definition}</p></article>)}</div></section>}
 
-          {activeSection === 'AI insights' && <section><div className="welcome-row"><div><p className="overline">PRIVATE · LOCAL MODEL</p><h1>Understand your <em>portfolio.</em></h1><p className="welcome-copy">Ask your configured Ollama model to summarize concentration and data quality using saved holdings.</p></div><Button variant="ai" onClick={() => void generateAIReview()} disabled={aiLoading || !preferences?.ollama_enabled}>{aiLoading ? 'Reviewing…' : 'Generate review'}</Button></div>
+          {activeSection === 'AI insights' && <section><div className="welcome-row"><div><p className="overline">PRIVATE · LOCAL MODEL</p><h1>Understand your <em>portfolio.</em></h1><p className="welcome-copy">A sourced Markdown review of portfolio composition, available news, concentration, and data gaps.</p></div><Button variant="ai" onClick={() => void generateAIReview()} disabled={aiLoading || !preferences?.ollama_enabled}>{aiLoading ? 'Reviewing…' : 'Generate review'}</Button></div>
             {!preferences?.ollama_enabled && <div className="panel"><h2>Enable local AI in Settings</h2><p>Choose a local Ollama endpoint and installed model, then enable AI portfolio review.</p><Button variant="outline" onClick={() => openSection('Settings')}>Open settings</Button></div>}
-            {aiReview && <><div className="panel ai-summary"><h2>Summary · {aiReview.model}</h2><p>{aiReview.summary}</p><small>Generated {formatDate(aiReview.generated_at)} · {aiReview.scope}</small></div><div className="ai-insight-grid">{aiReview.insights.map((item, index) => <article className="panel" key={`${item.title}-${index}`}><span className="status-pill">{item.type}</span><h2>{item.title}</h2><p>{item.detail}</p><small>Portfolio evidence: {item.evidence}</small></article>)}</div></>}
-            <p className="ai-disclaimer">Informational only. The model does not forecast returns or provide buy, sell, or trade instructions.</p>
+            {aiReview && <article className="panel ai-summary"><div className="panel-heading"><div><h2>Portfolio analysis · {aiReview.model}</h2><p className="section-subtitle">Generated {formatDate(aiReview.generated_at)} · {aiReview.scope}</p></div><Button variant="outline" onClick={() => exportMarkdownReport(aiReview)}><Download size={14}/> Export Markdown</Button></div><Markdown source={aiReview.markdown} /></article>}
+            <p className="ai-disclaimer">The equal-weight quantities are an illustrative rebalance scenario, not personalized targets or orders. Review price dates, goals, risk tolerance, liquidity, taxes, and fees before making decisions.</p>
+            {renderReportArchive('portfolio')}
+          </section>}
+
+          {activeSection === 'News & reports' && <section className="news-page"><div className="welcome-row"><div><p className="overline">PORTFOLIO COVERAGE</p><h1>News & <em>reports.</em></h1><p className="welcome-copy">Cached per-holding Yahoo Finance headlines and market RSS stories matched to holdings. Refresh checks each source cache before fetching again.</p></div><div className="manual-actions"><Button variant="outline" disabled={newsLoading || !preferences || (!preferences.rss_news_enabled && !(preferences.yahoo_news_enabled && preferences.yahoo_terms_confirmed))} onClick={() => void syncPortfolioNews()}><RefreshCw size={15} className={newsLoading ? 'spin' : ''}/>{newsLoading ? 'Refreshing…' : 'Refresh headlines'}</Button><Button variant="ai" disabled={newsReportLoading || !preferences?.ollama_enabled || !newsItems.length} onClick={() => void generateAINewsReport()}><Bot size={15}/>{newsReportLoading ? 'Writing report…' : 'Write local AI report'}</Button></div></div>
+            {preferences && !preferences.rss_news_enabled && !preferences.yahoo_news_enabled && <div className="panel news-gate"><h2>Choose news sources in Settings</h2><p>Enable market RSS feeds or Yahoo portfolio headlines. Yahoo access also requires the saved permission confirmation.</p><Button variant="outline" onClick={() => openSection('Settings')}>Open settings</Button></div>}
+            {preferences?.yahoo_news_enabled && !preferences.yahoo_terms_confirmed && !preferences.rss_news_enabled && <div className="panel news-gate"><h2>Confirm Yahoo access in Settings</h2><p>Yahoo portfolio headline refresh requires its permission acknowledgement. Market RSS feeds can be enabled independently.</p><Button variant="outline" onClick={() => openSection('Settings')}>Open settings</Button></div>}
+            {newsReport && <section className="panel news-ai-report"><div className="panel-heading"><div><h2>AI news report</h2><p className="section-subtitle">Generated locally with {newsReport.model} · {formatDate(newsReport.generated_at)}</p></div><Button variant="outline" onClick={() => exportMarkdownReport(newsReport)}><Download size={14}/> Export Markdown</Button></div><Markdown source={newsReport.markdown} /><small>{newsReport.scope}</small></section>}
+            {renderReportArchive('news')}
+            <div className="news-list">{newsItems.length === 0 ? <div className="panel news-empty"><Newspaper size={23}/><h2>No saved headlines in this window</h2><p>Enable sources in Settings and refresh. Articles are de-duplicated and cached in SQLite by source URL.</p></div> : newsItems.map(article => <article className="panel news-card" key={article.id}><div className="news-card-meta"><span>{article.related_tickers?.join(', ') || article.ticker}</span><span>{article.publisher || 'News source'}</span><time>{formatDate(article.published_at)}</time></div><h2>{article.url ? <a href={article.url} target="_blank" rel="noreferrer">{article.title} <ExternalLink size={13}/></a> : article.title}</h2>{article.summary && <p>{article.summary}</p>}<small>{article.instrument_name} · {article.asset_type} · fetched {formatDate(article.fetched_at)}</small></article>)}</div>
           </section>}
 
           {activeSection === 'Activity' && <section><div className="welcome-row"><div><p className="overline">DATA FRESHNESS</p><h1>Recent <em>activity.</em></h1><p className="welcome-copy">Review connections, refresh attempts, and the age of your saved snapshots.</p></div><Button variant="outline" onClick={() => void syncPortfolio()} disabled={refreshing}><RefreshCw size={15}/> Sync Zerodha</Button></div><div className="panel activity-list">{sources.length === 0 ? <p>No source activity has been recorded yet.</p> : sources.map(source => <article className="activity-item" key={source.source}><span className={`status-pill ${source.state}`}>{source.state}</span><div><h2>{source.source}</h2><p>{source.status_message || source.last_error || 'No status detail available.'}</p><small>Last success: {formatDate(source.last_successful_refresh)} · Last attempt: {formatDate(source.last_attempted_refresh)} · Data date: {formatDate(source.as_of)}</small></div></article>)}</div></section>}
@@ -714,7 +884,7 @@ function App() {
           <section className="welcome-row">
             <div><p className="overline">{today}</p><h1>Your portfolio, <em>in focus.</em></h1><p className="welcome-copy">A calm place to understand what you own and how it’s doing.</p></div>
             <div className="welcome-actions">
-              <Button variant="outline" onClick={loadSamplePortfolio}><FileUp size={16} /> Load sample</Button>
+              <Button variant="outline" onClick={() => openSection('Manual portfolio')}><Plus size={16} /> Add holdings</Button>
               <Button onClick={() => void syncPortfolio()} disabled={refreshing}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /> Sync Zerodha</Button>
             </div>
           </section>
@@ -741,7 +911,7 @@ function App() {
             <section className="panel allocation-panel" aria-labelledby="allocation-title">
               <div className="panel-heading"><div><h2 id="allocation-title">Asset allocation</h2><p className="section-subtitle">Where your portfolio is invested</p></div><button className="icon-button small" aria-label="Allocation information" onClick={() => setNotice('Allocation is calculated from the latest imported holdings.')}><CircleHelp size={16} /></button></div>
               {allocations.length === 0 ? (
-                <div className="allocation-empty"><div className="donut" aria-hidden="true"><div className="donut-inner"><ChartNoAxesCombined size={23} /></div></div><strong>{holdings.length ? 'No priced INR holdings yet' : 'No holdings yet'}</strong><p>{holdings.length ? 'Allocation uses priced INR positions. Other currencies stay separate until conversion is configured.' : 'Import a statement or load the sample portfolio.'}</p>{!holdings.length && <button className="text-button" onClick={loadSamplePortfolio}>Load sample data <ArrowUpRight size={14} /></button>}</div>
+                <div className="allocation-empty"><div className="donut" aria-hidden="true"><div className="donut-inner"><ChartNoAxesCombined size={23} /></div></div><strong>{holdings.length ? 'No priced INR holdings yet' : 'No holdings yet'}</strong><p>{holdings.length ? 'Allocation uses priced INR positions. Other currencies stay separate until conversion is configured.' : 'Sync Zerodha or add a position to get started.'}</p>{!holdings.length && <button className="text-button" onClick={() => openSection('Manual portfolio')}>Add manual holdings <ArrowUpRight size={14} /></button>}</div>
               ) : (
                 <div className="allocation-list">
                   {allocations.map((bucket) => (
@@ -852,4 +1022,18 @@ if (!rootElement) {
   throw new Error('Could not find the React root element.');
 }
 
-createRoot(rootElement).render(<App />);
+const router = createBrowserRouter([
+  {
+    path: '/',
+    element: <App />,
+    children: [
+      { index: true },
+      ...navigation.filter(({ label }) => label !== 'Overview').map(({ label }) => ({
+        path: sectionPaths[label].slice(1),
+      })),
+    ],
+  },
+  { path: '*', element: <Navigate to="/" replace /> },
+]);
+
+createRoot(rootElement).render(<RouterProvider router={router} />);

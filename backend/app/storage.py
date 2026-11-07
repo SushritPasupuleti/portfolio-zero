@@ -4,7 +4,7 @@ import json
 import os
 import sqlite3
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .models import (
@@ -163,6 +163,57 @@ def initialize_db() -> None:
                 asset_type TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS news_articles (
+                id TEXT PRIMARY KEY,
+                ticker TEXT NOT NULL,
+                instrument_name TEXT NOT NULL,
+                asset_type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                publisher TEXT,
+                summary TEXT,
+                url TEXT,
+                published_at TEXT,
+                fetched_at TEXT NOT NULL,
+                source_key TEXT NOT NULL DEFAULT 'yahoo',
+                related_tickers TEXT NOT NULL DEFAULT '[]'
+            )
+            """
+        )
+        news_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(news_articles)").fetchall()
+        }
+        if "source_key" not in news_columns:
+            connection.execute(
+                "ALTER TABLE news_articles ADD COLUMN source_key TEXT NOT NULL DEFAULT 'yahoo'"
+            )
+        if "related_tickers" not in news_columns:
+            connection.execute(
+                "ALTER TABLE news_articles ADD COLUMN related_tickers TEXT NOT NULL DEFAULT '[]'"
+            )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS news_source_meta (
+                source_key TEXT PRIMARY KEY,
+                last_fetched_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ai_reports (
+                report_id TEXT PRIMARY KEY,
+                report_type TEXT NOT NULL,
+                model TEXT NOT NULL,
+                markdown TEXT NOT NULL,
+                generated_at TEXT,
+                saved_at TEXT NOT NULL,
+                scope TEXT NOT NULL
             )
             """
         )
@@ -454,6 +505,153 @@ def delete_manual_positions(ids: list[str] | None = None) -> int:
         else:
             return 0
     return cursor.rowcount
+
+
+def get_news_articles(
+    lookback_hours: int = 720, max_articles: int = 200
+) -> list[dict[str, object]]:
+    cutoff = _utc_iso(datetime.now(UTC) - timedelta(hours=lookback_hours))
+    with get_connection() as connection:
+        rows = connection.execute(
+            """SELECT * FROM news_articles
+               WHERE COALESCE(published_at, fetched_at) >= ?
+               ORDER BY COALESCE(published_at, fetched_at) DESC
+               LIMIT ?""",
+            (cutoff, max_articles),
+        ).fetchall()
+    items = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["related_tickers"] = json.loads(item.get("related_tickers") or "[]")
+        except (TypeError, ValueError):
+            item["related_tickers"] = []
+        items.append(item)
+    return items
+
+
+def news_source_is_fresh(source_key: str, ttl_minutes: int = 30) -> bool:
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT last_fetched_at FROM news_source_meta WHERE source_key = ?",
+            (source_key,),
+        ).fetchone()
+    if not row:
+        return False
+    try:
+        fetched = datetime.fromisoformat(row["last_fetched_at"].replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    return (datetime.now(UTC) - fetched.astimezone(UTC)).total_seconds() < ttl_minutes * 60
+
+
+def mark_news_source_fetched(source_key: str) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """INSERT INTO news_source_meta(source_key, last_fetched_at) VALUES (?, ?)
+               ON CONFLICT(source_key) DO UPDATE SET last_fetched_at = excluded.last_fetched_at""",
+            (source_key, _utc_iso(datetime.now(UTC))),
+        )
+
+
+def upsert_news_articles(items: list[dict[str, object]]) -> int:
+    with get_connection() as connection:
+        for item in items:
+            old = connection.execute(
+                "SELECT related_tickers FROM news_articles WHERE id = ?",
+                (item["id"],),
+            ).fetchone()
+            related_tickers = set(item.get("related_tickers", []))
+            if old:
+                try:
+                    related_tickers.update(json.loads(old["related_tickers"] or "[]"))
+                except (TypeError, ValueError):
+                    pass
+            connection.execute(
+                """INSERT INTO news_articles (
+                id, ticker, instrument_name, asset_type, title, publisher, summary,
+                url, published_at, fetched_at, source_key, related_tickers
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                ticker = excluded.ticker,
+                instrument_name = excluded.instrument_name,
+                asset_type = excluded.asset_type,
+                title = excluded.title,
+                publisher = excluded.publisher,
+                summary = COALESCE(excluded.summary, news_articles.summary),
+                url = COALESCE(excluded.url, news_articles.url),
+                published_at = COALESCE(excluded.published_at, news_articles.published_at),
+                fetched_at = excluded.fetched_at,
+                related_tickers = excluded.related_tickers""",
+                (
+                    item["id"], item["ticker"], item["instrument_name"],
+                    item["asset_type"], item["title"], item.get("publisher"),
+                    item.get("summary"), item.get("url"), item.get("published_at"),
+                    item["fetched_at"], item.get("source_key", "yahoo"),
+                    json.dumps(sorted(related_tickers)),
+                ),
+            )
+    return len(items)
+
+
+def prune_news_articles(retention_days: int = 30) -> int:
+    cutoff = _utc_iso(datetime.now(UTC) - timedelta(days=retention_days))
+    with get_connection() as connection:
+        cursor = connection.execute(
+            "DELETE FROM news_articles WHERE COALESCE(published_at, fetched_at) < ?",
+            (cutoff,),
+        )
+    return cursor.rowcount
+
+
+def save_ai_report(
+    report_type: str,
+    model: str,
+    markdown: str,
+    generated_at: str | None,
+    scope: str,
+) -> dict[str, object]:
+    report = {
+        "report_id": str(uuid.uuid4()),
+        "report_type": report_type,
+        "model": model,
+        "markdown": markdown,
+        "generated_at": generated_at,
+        "saved_at": _utc_iso(datetime.now(UTC)),
+        "scope": scope,
+    }
+    with get_connection() as connection:
+        connection.execute(
+            """INSERT INTO ai_reports (
+                   report_id, report_type, model, markdown, generated_at, saved_at, scope
+               ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            tuple(report.values()),
+        )
+    return report
+
+
+def list_ai_reports(
+    report_type: str | None = None, limit: int = 100
+) -> list[dict[str, object]]:
+    query = """SELECT report_id, report_type, model, generated_at, saved_at, scope
+               FROM ai_reports"""
+    parameters: list[object] = []
+    if report_type:
+        query += " WHERE report_type = ?"
+        parameters.append(report_type)
+    query += " ORDER BY saved_at DESC LIMIT ?"
+    parameters.append(limit)
+    with get_connection() as connection:
+        rows = connection.execute(query, parameters).fetchall()
+    return [dict(row) for row in rows]
+
+
+def get_ai_report(report_id: str) -> dict[str, object] | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT * FROM ai_reports WHERE report_id = ?", (report_id,)
+        ).fetchone()
+    return dict(row) if row else None
 
 
 def import_manual_positions(items: list[ManualPositionInput], replace_existing: bool) -> int:
@@ -942,6 +1140,9 @@ def clear_local_data() -> None:
         connection.execute("DELETE FROM imports")
         connection.execute("DELETE FROM preferences")
         connection.execute("DELETE FROM manual_positions")
+        connection.execute("DELETE FROM news_articles")
+        connection.execute("DELETE FROM news_source_meta")
+        connection.execute("DELETE FROM ai_reports")
         connection.execute("DELETE FROM app_settings")
 
 

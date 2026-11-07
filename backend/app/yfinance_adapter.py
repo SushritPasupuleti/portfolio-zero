@@ -4,14 +4,19 @@ from datetime import UTC, datetime
 from math import isfinite
 
 from .kite_adapter import SOURCE_NAME
-from .storage import get_holdings, update_market_prices, upsert_source_status
+from .storage import (
+    get_holdings,
+    list_manual_positions,
+    update_market_prices,
+    upsert_source_status,
+)
 
 SOURCE_LABEL = "Yahoo Finance via yfinance"
 SOURCE_TYPE = "yfinance_daily"
 
 
 def sync_daily_prices() -> dict[str, int | str | list[str]]:
-    """Refresh raw daily closes for supported Zerodha equity holdings."""
+    """Refresh raw daily closes for supported Zerodha and manual stock holdings."""
     import yfinance as yf
 
     candidates = [
@@ -25,9 +30,23 @@ def sync_daily_prices() -> dict[str, int | str | list[str]]:
         if not suffix:
             continue
         ticker_to_ids.setdefault(f"{holding.symbol}{suffix}", []).append(holding.id)
+    for position in list_manual_positions():
+        if position["asset_type"] not in {"stock", "etf"}:
+            continue
+        market = str(position["market"])
+        suffix = {"NSE": ".NS", "BSE": ".BO", "NYSE": ""}.get(market)
+        if suffix is None:
+            continue
+        ticker = f"{position['ticker']}{suffix}"
+        ticker_to_ids.setdefault(ticker, []).append(
+            f"manual-position:{position['id']}"
+        )
 
     if not ticker_to_ids:
-        message = "No supported Zerodha equity symbols are available for daily price sync."
+        message = (
+            "No supported Zerodha or manual stock/ETF tickers are available "
+            "for daily price sync."
+        )
         upsert_source_status(
             SOURCE_LABEL,
             SOURCE_TYPE,
@@ -84,7 +103,8 @@ def sync_daily_prices() -> dict[str, int | str | list[str]]:
     updated = update_market_prices(updates, SOURCE_LABEL)
     state = "connected" if updated and not missing else "partial"
     message = (
-        f"Updated {updated} equity prices from Yahoo Finance daily closes."
+        f"Updated {updated} equity prices from Yahoo Finance daily closes, "
+        "including manual holdings."
         if updated
         else "Yahoo Finance returned no usable daily closes; existing prices were kept."
     )

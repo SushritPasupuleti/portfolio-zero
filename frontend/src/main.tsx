@@ -2,16 +2,34 @@ import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   Activity, ArrowDownLeft, ArrowUpRight, BookOpen, Bot, BriefcaseBusiness,
-  ChartNoAxesCombined, ChevronDown, CircleHelp, FileUp,
-  Landmark, LayoutDashboard, Menu, RefreshCw, Search, Server, Settings2, ShieldCheck,
-  WalletCards,
+  ChartNoAxesCombined, Check, ChevronDown, CircleHelp, Download, FileUp, Grid2X2,
+  Landmark, LayoutDashboard, Menu, Plus, RefreshCw, Search, Server, Settings2,
+  ShieldCheck, Trash2, Upload, WalletCards,
 } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
+import { Input } from './components/ui/input';
+import { Select } from './components/ui/select';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
 import './style.css';
 
 type Health = 'checking' | 'connected' | 'unavailable';
-type Section = 'Overview' | 'Holdings' | 'Activity' | 'AI insights' | 'Glossary' | 'Settings';
+type Section = 'Overview' | 'Holdings' | 'Manual portfolio' | 'Activity' | 'AI insights' | 'Glossary' | 'Settings';
+
+type ManualPosition = {
+  id: string;
+  ticker: string;
+  units: number;
+  market: 'BSE' | 'NSE' | 'NYSE';
+  buy_price: number;
+  current_price: number | null;
+  price_as_of: string | null;
+  price_source: string | null;
+  source: string;
+  asset_type: 'stock' | 'mf' | 'etf' | 'bond' | 'other';
+  created_at: string;
+  updated_at: string;
+};
 
 type Preferences = {
   show_manual_imports: boolean;
@@ -99,6 +117,7 @@ type SourceStatusItem = {
 const navigation: { label: Section; icon: typeof LayoutDashboard }[] = [
   { label: 'Overview', icon: LayoutDashboard },
   { label: 'Holdings', icon: BriefcaseBusiness },
+  { label: 'Manual portfolio', icon: Grid2X2 },
   { label: 'Activity', icon: Activity },
   { label: 'AI insights', icon: Bot },
   { label: 'Glossary', icon: BookOpen },
@@ -150,6 +169,14 @@ function App() {
   const [aiReview, setAiReview] = useState<AIReview | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [glossarySearch, setGlossarySearch] = useState('');
+  const [manualPositions, setManualPositions] = useState<ManualPosition[]>([]);
+  const [selectedManualIds, setSelectedManualIds] = useState<string[]>([]);
+  const [bulkMarket, setBulkMarket] = useState('');
+  const [bulkType, setBulkType] = useState('');
+  const [bulkSource, setBulkSource] = useState('');
+  const [csvMode, setCsvMode] = useState<'append' | 'replace'>('append');
+  const [manualBusy, setManualBusy] = useState(false);
+  const [manualDirty, setManualDirty] = useState(false);
   const today = new Intl.DateTimeFormat('en-IN', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
   }).format(new Date()).toUpperCase();
@@ -157,13 +184,30 @@ function App() {
   const filteredGlossary = glossaryTerms.filter((item) =>
     `${item.term} ${item.definition}`.toLowerCase().includes(glossarySearch.toLowerCase()),
   );
+  const sourceSplit = holdings.reduce<Record<string, { value: number; count: number; unpriced: number; currency: string }>>((groups, holding) => {
+    const currency = holding.currency || 'INR';
+    const key = `${holding.source || 'Unknown'}|${currency}`;
+    const group = groups[key] ?? { value: 0, count: 0, unpriced: 0, currency };
+    group.value += holding.value ?? 0;
+    group.count += 1;
+    if (holding.value == null) group.unpriced += 1;
+    groups[key] = group;
+    return groups;
+  }, {});
+  const currencyTotals = Object.values(sourceSplit).reduce<Record<string, number>>((totals, item) => {
+    totals[item.currency] = (totals[item.currency] ?? 0) + item.value;
+    return totals;
+  }, {});
+  const invalidManualRow = manualPositions.some(row =>
+    !row.ticker.trim() || !row.source.trim() || row.units <= 0 || row.buy_price < 0,
+  );
 
-  const formatCurrency = (value: number | null) => {
+  const formatCurrency = (value: number | null, currency = 'INR') => {
     if (value == null) return '—';
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
-      currency: 'INR',
-      maximumFractionDigits: 0,
+      currency,
+      maximumFractionDigits: currency === 'INR' ? 0 : 2,
     }).format(value);
   };
 
@@ -234,6 +278,152 @@ function App() {
     }
   }
 
+  async function loadManualPortfolio() {
+    try {
+      const response = await fetch('/api/manual-portfolio');
+      if (!response.ok) throw new Error('Manual portfolio could not be loaded.');
+      const payload = (await response.json()) as { items: ManualPosition[] };
+      setManualPositions(payload.items ?? []);
+      setSelectedManualIds([]);
+      setManualDirty(false);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Manual portfolio could not be loaded.');
+    }
+  }
+
+  async function saveManualPortfolio() {
+    setManualBusy(true);
+    try {
+      const payload = manualPositions.map(({ id, ticker, units, market, buy_price, current_price, source, asset_type }) => ({
+        id: id.startsWith('draft-') ? null : id,
+        ticker,
+        units: Number(units),
+        market,
+        buy_price: Number(buy_price),
+        current_price: current_price == null ? null : Number(current_price),
+        source,
+        asset_type,
+      }));
+      const response = await fetch('/api/manual-portfolio', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || 'Manual portfolio could not be saved.');
+      setManualPositions(result.items as ManualPosition[]);
+      setSelectedManualIds([]);
+      setManualDirty(false);
+      await Promise.all([loadSummary(), loadPortfolioData()]);
+      setNotice('Manual portfolio saved separately from Zerodha.');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Manual portfolio could not be saved.');
+    } finally {
+      setManualBusy(false);
+    }
+  }
+
+  function addManualPosition() {
+    setManualDirty(true);
+    setManualPositions(rows => [...rows, {
+      id: `draft-${crypto.randomUUID()}`, ticker: '', units: 1, market: 'NSE', buy_price: 0,
+      current_price: null, price_as_of: null, price_source: null, source: '', asset_type: 'stock',
+      created_at: '', updated_at: '',
+    }]);
+  }
+
+  async function applyManualBulkEdit() {
+    const updates = Object.fromEntries([
+      ['market', bulkMarket], ['asset_type', bulkType], ['source', bulkSource.trim()],
+    ].filter(([, value]) => value));
+    if (!selectedManualIds.length || !Object.keys(updates).length) return;
+    setManualBusy(true);
+    try {
+      const response = await fetch('/api/manual-portfolio/bulk', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: selectedManualIds, ...updates }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Bulk edit failed.');
+      setManualPositions(rows => rows.map(row => selectedManualIds.includes(row.id) ? {
+        ...row,
+        ...(bulkMarket ? {
+          market: bulkMarket as ManualPosition['market'],
+          current_price: null,
+          price_as_of: null,
+          price_source: null,
+        } : {}),
+        ...(bulkType ? { asset_type: bulkType as ManualPosition['asset_type'] } : {}),
+        ...(bulkSource.trim() ? { source: bulkSource.trim() } : {}),
+      } : row));
+      if (selectedManualIds.some(id => id.startsWith('draft-'))) setManualDirty(true);
+      setSelectedManualIds([]);
+      setBulkMarket(''); setBulkType(''); setBulkSource('');
+      await Promise.all([loadSummary(), loadPortfolioData()]);
+      setNotice(`Updated ${payload.updated} selected row(s).`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Bulk edit failed.');
+    } finally { setManualBusy(false); }
+  }
+
+  async function deleteSelectedManualRows() {
+    if (!selectedManualIds.length) return;
+    if (!window.confirm(`Delete ${selectedManualIds.length} selected manual row(s)?`)) return;
+    setManualBusy(true);
+    try {
+      const savedIds = selectedManualIds.filter(id => !id.startsWith('draft-'));
+      let deleted = 0;
+      if (savedIds.length) {
+        const response = await fetch('/api/manual-portfolio/bulk-delete', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: savedIds }),
+        });
+        const payload = await response.json();
+        if (!response.ok) throw new Error(payload.detail || 'Selected rows could not be deleted.');
+        deleted = payload.deleted;
+      }
+      setManualPositions(rows => rows.filter(row => !selectedManualIds.includes(row.id)));
+      setSelectedManualIds([]);
+      await Promise.all([loadSummary(), loadPortfolioData()]);
+      setNotice(`Deleted ${deleted} saved row(s) and cleared unsaved rows.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Selected rows could not be deleted.');
+    } finally { setManualBusy(false); }
+  }
+
+  async function importManualCsv(file: File) {
+    if (manualDirty && !window.confirm('Discard unsaved grid edits and continue with this CSV import?')) return;
+    if (csvMode === 'replace' && !window.confirm('Replace every saved manual position with rows from this CSV?')) return;
+    setManualBusy(true);
+    try {
+      const csvText = await file.text();
+      const response = await fetch('/api/manual-portfolio/import', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv_text: csvText, replace_existing: csvMode === 'replace' }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'CSV import failed.');
+      await loadManualPortfolio();
+      await Promise.all([loadSummary(), loadPortfolioData()]);
+      const rowIssues = (payload.warnings as string[] | undefined)?.slice(0, 2).join(' ');
+      setNotice(`Imported ${payload.imported} row(s)${payload.skipped ? `; skipped ${payload.skipped} invalid row(s). ${rowIssues ?? ''}` : ''}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'CSV import failed.');
+    } finally { setManualBusy(false); }
+  }
+
+  function syncManualCell<K extends keyof ManualPosition>(id: string, field: K, value: ManualPosition[K]) {
+    setManualDirty(true);
+    setManualPositions(rows => rows.map(row => {
+      if (row.id !== id) return row;
+      const updated = { ...row, [field]: value };
+      if ((field === 'ticker' && row.ticker !== value) || (field === 'market' && row.market !== value)) {
+        updated.current_price = null;
+        updated.price_as_of = null;
+        updated.price_source = null;
+      }
+      return updated;
+    }));
+  }
+
   async function loadTokenStatus(): Promise<TokenStatus> {
     try {
       const response = await fetch('/api/token/status');
@@ -265,7 +455,7 @@ function App() {
     const response = await fetch('/api/market-data/sync', { method: 'POST' });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || 'Daily price sync failed.');
-    await Promise.all([loadSummary(), loadPortfolioData()]);
+    await Promise.all([loadSummary(), loadPortfolioData(), loadManualPortfolio()]);
     return payload as { updated: number; message: string };
   }
 
@@ -424,9 +614,13 @@ function App() {
   useEffect(() => { void syncPortfolio(false); }, []);
 
   const openSection = (section: Section) => {
+    if (activeSection === section) return;
+    if (activeSection === 'Manual portfolio' && section !== 'Manual portfolio' && manualDirty
+      && !window.confirm('Discard unsaved manual portfolio edits and leave this view?')) return;
     setActiveSection(section);
     setNotice('');
     if (section === 'Settings' && !preferences) void loadPreferences();
+    if (section === 'Manual portfolio') void loadManualPortfolio();
   };
 
   return (
@@ -462,6 +656,29 @@ function App() {
         </header>
 
         <div className="content-wrap">
+          {notice && <div className="notice" role="status"><span>{notice}</span><button className="notice-close" aria-label="Dismiss message" onClick={() => setNotice('')}>×</button></div>}
+          {activeSection === 'Manual portfolio' && <section className="manual-editor-page">
+            <div className="welcome-row"><div><p className="overline">SEPARATE FROM ZERODHA</p><h1>Manual <em>portfolio.</em></h1><p className="welcome-copy">Track investments held on other apps. These rows live in a dedicated SQLite table and are included in portfolio analysis when manual imports are visible.</p>{manualDirty && <p className="unsaved-indicator">Unsaved grid edits</p>}</div><div className="manual-actions"><Button variant="outline" disabled={manualBusy || manualDirty} onClick={() => { window.location.href = '/api/manual-portfolio/export'; }}><Download size={15}/> Export CSV</Button><Button variant="outline" onClick={addManualPosition}><Plus size={15}/> Add row</Button><Button onClick={() => void saveManualPortfolio()} disabled={manualBusy || invalidManualRow}><Check size={15}/>{manualBusy ? 'Saving…' : 'Save edits'}</Button></div></div>
+            <Card className="manual-import-card"><div className="manual-import-info"><strong>Import a CSV</strong><small>Required columns: ticker, units, market, buy_price, source, asset_type. current_price is optional.</small></div><Select value={csvMode} onChange={event => setCsvMode(event.target.value as 'append' | 'replace')} aria-label="CSV import mode"><option value="append">Append rows</option><option value="replace">Replace manual ledger</option></Select><label className="button button-outline csv-file-button"><Upload size={15}/> Choose CSV<input type="file" accept=".csv,text/csv" onChange={event => { const file = event.target.files?.[0]; if (file) void importManualCsv(file); event.currentTarget.value = ''; }} /></label></Card>
+            {selectedManualIds.length > 0 && <Card className="bulk-toolbar"><strong>{selectedManualIds.length} selected</strong><Select value={bulkMarket} onChange={event => setBulkMarket(event.target.value)} aria-label="Bulk set market"><option value="">Set market…</option><option value="NSE">NSE</option><option value="BSE">BSE</option><option value="NYSE">NYSE</option></Select><Select value={bulkType} onChange={event => setBulkType(event.target.value)} aria-label="Bulk set type"><option value="">Set type…</option><option value="stock">Stock</option><option value="mf">Mutual fund</option><option value="etf">ETF</option><option value="bond">Bond</option><option value="other">Other</option></Select><Input aria-label="Bulk set source" list="manual-sources" placeholder="Set source (e.g. Groww)" value={bulkSource} onChange={event => setBulkSource(event.target.value)} /><Button variant="outline" onClick={() => void applyManualBulkEdit()} disabled={manualBusy}>Apply changes</Button><Button variant="outline" className="danger-button" onClick={() => void deleteSelectedManualRows()} disabled={manualBusy}><Trash2 size={14}/> Delete selected</Button></Card>}
+            <section className="panel manual-grid-panel"><div className="panel-heading"><div><h2>Investment ledger</h2><p className="section-subtitle">Edit cells directly, then save changes. Price sync fills current prices for stock and ETF rows.</p></div><Button variant="outline" disabled={refreshing || manualDirty || !preferences?.yfinance_sync_enabled || !preferences?.yahoo_terms_confirmed} onClick={() => void syncMarketData()}><RefreshCw size={14}/>{refreshing ? 'Syncing…' : 'Sync Yahoo prices'}</Button></div>
+              <datalist id="manual-sources">{[...new Set(manualPositions.map(item => item.source).filter(Boolean))].map(source => <option key={source} value={source}/>)}</datalist>
+              <Table className="manual-grid"><TableHeader><TableRow><TableHead><input aria-label="Select all rows" type="checkbox" checked={manualPositions.length > 0 && manualPositions.every(row => selectedManualIds.includes(row.id))} onChange={event => setSelectedManualIds(event.target.checked ? manualPositions.map(row => row.id) : [])}/></TableHead><TableHead scope="col">Ticker</TableHead><TableHead scope="col">Units</TableHead><TableHead scope="col">Market</TableHead><TableHead scope="col">Buy price</TableHead><TableHead scope="col">Current price</TableHead><TableHead scope="col">Source</TableHead><TableHead scope="col">Type</TableHead><TableHead scope="col">Market value</TableHead></TableRow></TableHeader><TableBody>
+                {manualPositions.map(row => <TableRow key={row.id}><TableCell><input aria-label={`Select ${row.ticker || 'new row'}`} type="checkbox" checked={selectedManualIds.includes(row.id)} onChange={event => setSelectedManualIds(ids => event.target.checked ? [...ids, row.id] : ids.filter(id => id !== row.id))}/></TableCell>
+                  <TableCell><Input aria-label="Ticker" value={row.ticker} onChange={event => syncManualCell(row.id, 'ticker', event.target.value)}/></TableCell>
+                  <TableCell><Input aria-label="Units" type="number" min="0.000001" step="any" value={row.units} onChange={event => syncManualCell(row.id, 'units', Number(event.target.value))}/></TableCell>
+                  <TableCell><Select aria-label="Market" value={row.market} onChange={event => syncManualCell(row.id, 'market', event.target.value as ManualPosition['market'])}><option value="NSE">NSE</option><option value="BSE">BSE</option><option value="NYSE">NYSE</option></Select></TableCell>
+                  <TableCell><Input aria-label="Buy price" type="number" min="0" step="any" value={row.buy_price} onChange={event => syncManualCell(row.id, 'buy_price', Number(event.target.value))}/></TableCell>
+                  <TableCell><span className="manual-price-cell">{row.current_price == null ? '—' : formatCurrency(row.current_price, row.market === 'NYSE' ? 'USD' : 'INR')}<small>{row.price_source ?? (row.market === 'NYSE' ? 'USD' : 'INR')} · {formatDate(row.price_as_of)}</small></span></TableCell>
+                  <TableCell><Input aria-label="Source app or broker" list="manual-sources" placeholder="e.g. Groww" value={row.source} onChange={event => syncManualCell(row.id, 'source', event.target.value)}/></TableCell>
+                  <TableCell><Select aria-label="Asset type" value={row.asset_type} onChange={event => syncManualCell(row.id, 'asset_type', event.target.value as ManualPosition['asset_type'])}><option value="stock">Stock</option><option value="mf">Mutual fund</option><option value="etf">ETF</option><option value="bond">Bond</option><option value="other">Other</option></Select></TableCell>
+                  <TableCell>{formatCurrency(row.current_price == null ? null : row.current_price * row.units, row.market === 'NYSE' ? 'USD' : 'INR')}</TableCell>
+                </TableRow>)}
+                {manualPositions.length === 0 && <TableRow><TableCell colSpan={9} className="manual-empty">No manual positions yet. Add a row or import a CSV.</TableCell></TableRow>}
+              </TableBody></Table>
+              <p className="manual-grid-note">Ticker and source are required; units must be positive. Prices use the market currency. Yahoo Finance refresh is optional and gated in Settings. NYSE values are in USD; currency conversion is not applied to INR portfolio totals.</p>
+            </section>
+          </section>}
           {activeSection === 'Settings' && <section className="settings-page">
             <div className="welcome-row"><div><p className="overline">LOCAL PREFERENCES</p><h1>Make it <em>yours.</em></h1><p className="welcome-copy">Saved in this app’s SQLite database on your device.</p></div><Button onClick={() => void saveSettings()} disabled={!preferences || settingsSaving}>{settingsSaving ? 'Saving…' : 'Save preferences'}</Button></div>
             {!preferences ? <div className="panel">Loading saved preferences…</div> : <>
@@ -502,8 +719,6 @@ function App() {
             </div>
           </section>
 
-          {notice && <div className="notice" role="status"><span>{notice}</span><button className="notice-close" aria-label="Dismiss message" onClick={() => setNotice('')}>×</button></div>}
-
           {tokenStatus && !tokenStatus.configured && (
             <section className="panel" aria-labelledby="setup-heading">
               <div className="panel-heading"><div><h2 id="setup-heading">Setup required</h2><p className="section-subtitle">The app needs a local Zerodha access token before it can load holdings.</p></div></div>
@@ -519,13 +734,14 @@ function App() {
               <Card className="metric-card" role="group" aria-label="Invested amount"><div className="metric-label">Invested amount <span className="metric-icon peach"><Landmark size={17} /></span></div><div className="metric-value">{formatCurrency(summary?.invested ?? null)}</div><div className="metric-foot">{summary?.invested != null ? 'Based on imported transactions' : 'No cost basis yet'}</div></Card>
               <Card className="metric-card" role="group" aria-label="Overall returns"><div className="metric-label">Overall returns <span className="metric-icon blue"><ArrowUpRight size={17} /></span></div><div className="metric-value">{formatCurrency(summary?.pnl ?? null)}</div><div className="metric-foot">{summary?.pnl != null ? 'Portfolio P&L' : 'P&amp;L appears when cost data is available'}</div></Card>
             </div>
+            {summary?.warnings.length ? <div className="summary-warnings" role="status">{summary.warnings.map((warning, index) => <p key={`${index}-${warning}`}>{warning}</p>)}</div> : null}
           </section>
 
           <div className="dashboard-grid">
             <section className="panel allocation-panel" aria-labelledby="allocation-title">
               <div className="panel-heading"><div><h2 id="allocation-title">Asset allocation</h2><p className="section-subtitle">Where your portfolio is invested</p></div><button className="icon-button small" aria-label="Allocation information" onClick={() => setNotice('Allocation is calculated from the latest imported holdings.')}><CircleHelp size={16} /></button></div>
               {allocations.length === 0 ? (
-                <div className="allocation-empty"><div className="donut" aria-hidden="true"><div className="donut-inner"><ChartNoAxesCombined size={23} /></div></div><strong>No holdings yet</strong><p>Import a statement or load the sample portfolio.</p><button className="text-button" onClick={loadSamplePortfolio}>Load sample data <ArrowUpRight size={14} /></button></div>
+                <div className="allocation-empty"><div className="donut" aria-hidden="true"><div className="donut-inner"><ChartNoAxesCombined size={23} /></div></div><strong>{holdings.length ? 'No priced INR holdings yet' : 'No holdings yet'}</strong><p>{holdings.length ? 'Allocation uses priced INR positions. Other currencies stay separate until conversion is configured.' : 'Import a statement or load the sample portfolio.'}</p>{!holdings.length && <button className="text-button" onClick={loadSamplePortfolio}>Load sample data <ArrowUpRight size={14} /></button>}</div>
               ) : (
                 <div className="allocation-list">
                   {allocations.map((bucket) => (
@@ -554,6 +770,10 @@ function App() {
             </section>
           </div>
 
+          {activeSection === 'Overview' && <section className="panel source-split-panel" aria-labelledby="source-split-title"><div className="panel-heading"><div><h2 id="source-split-title">Portfolio by source</h2><p className="section-subtitle">Market value grouped by the account or app where you hold it</p></div><Button variant="ghost" onClick={() => openSection('Manual portfolio')}>Manage manual rows <ArrowUpRight size={14}/></Button></div>
+            {Object.keys(sourceSplit).length === 0 ? <p className="source-split-empty">Add manual positions or sync Zerodha to see source coverage here.</p> : <div className="source-split-list">{Object.entries(sourceSplit).sort((a, b) => b[1].value - a[1].value).map(([key, item]) => { const [name] = key.split('|'); const percentage = currencyTotals[item.currency] ? item.value / currencyTotals[item.currency] * 100 : 0; return <div className="source-split-row" key={key}><span className="source-split-name"><i className="legend-dot equity"/><strong>{name}</strong><small>{item.count} holding{item.count === 1 ? '' : 's'}{item.unpriced ? ` · ${item.unpriced} unpriced` : ''}</small></span><span className="source-split-value">{formatCurrency(item.value, item.currency)}<small>{percentage.toFixed(1)}% of priced {item.currency} holdings</small></span></div>; })}</div>}
+          </section>}
+
           <section className="panel holdings-panel" aria-labelledby="holdings-heading">
             <div className="panel-heading holdings-heading"><div><h2 id="holdings-heading">Your holdings</h2><p className="section-subtitle">A clear view of each investment</p></div><Button variant="ghost" onClick={() => openSection('Holdings')}>View all <ArrowUpRight size={14} /></Button></div>
             <div className="table-scroll">
@@ -570,18 +790,18 @@ function App() {
                       <td>{holding.asset_class === 'mutual_fund' ? 'Mutual fund' : holding.asset_class === 'equity_position' ? 'Equity position' : holding.asset_class === 'derivative_position' ? 'Derivative' : holding.asset_class}</td>
                       <td>{formatCompact(holding.quantity)}</td>
                       <td title={`Price date: ${formatDate(holding.price_as_of)}`}>
-                        {formatCurrency(holding.last_price)}
+                        {formatCurrency(holding.last_price, holding.currency)}
                         <small className="table-price-date">{formatDate(holding.price_as_of)}</small>
                         <small className="table-price-date">{holding.price_source ?? holding.source}</small>
                       </td>
-                      <td>{formatCurrency(holding.value)}</td>
-                      <td>{formatCurrency(holding.pnl)}</td>
+                      <td>{formatCurrency(holding.value, holding.currency)}</td>
+                      <td>{formatCurrency(holding.pnl, holding.currency)}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <div className="table-note"><span>Values are shown in INR</span><span>Data date: {formatDate(summary?.as_of ?? null)}</span></div>
+            <div className="table-note"><span>INR and USD follow each holding’s market currency</span><span>Data date: {formatDate(summary?.as_of ?? null)}</span></div>
           </section>
 
           <section className="panel holdings-panel" aria-labelledby="sips-heading">

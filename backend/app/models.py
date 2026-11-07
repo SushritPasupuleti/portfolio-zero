@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 SourceState = Literal[
     "connected",
@@ -115,3 +115,38 @@ class Preferences(BaseModel):
     yfinance_sync_enabled: bool = False
     yahoo_terms_confirmed: bool = False
     auto_sync_yfinance: bool = False
+
+
+class ManualPositionInput(BaseModel):
+    id: str | None = None
+    ticker: str = Field(min_length=1, max_length=80)
+    units: float = Field(gt=0)
+    market: Literal["BSE", "NSE", "NYSE"]
+    buy_price: float = Field(ge=0)
+    current_price: float | None = Field(default=None, ge=0)
+    source: str = Field(min_length=1, max_length=120)
+    asset_type: Literal["stock", "mf", "etf", "bond", "other"] = "stock"
+
+    @field_validator("ticker", "source")
+    @classmethod
+    def strip_required_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field cannot be blank.")
+        return value
+
+
+class ManualPositionBulkEdit(BaseModel):
+    ids: list[str] = Field(min_length=1)
+    market: Literal["BSE", "NSE", "NYSE"] | None = None
+    source: str | None = Field(default=None, max_length=120)
+    asset_type: Literal["stock", "mf", "etf", "bond", "other"] | None = None
+
+
+class ManualPositionIds(BaseModel):
+    ids: list[str] = Field(min_length=1)
+
+
+class ManualPositionImport(BaseModel):
+    csv_text: str = Field(max_length=5_000_000)
+    replace_existing: bool = False

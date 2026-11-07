@@ -4,9 +4,11 @@ A local-first, read-only portfolio dashboard. Zerodha Kite Connect Personal prov
 
 ## Current state
 
-The repository has a React dashboard, FastAPI API, SQLite storage, read-only Kite portfolio sync, portfolio summary/holdings/SIP/source/export endpoints, import preview/commit endpoints, and a Streamlit token setup UI. Settings include manual-import visibility, Zerodha refresh behavior, local Ollama endpoint/model, and optional Yahoo daily-close refresh. The UI also includes a glossary, source activity, and local AI portfolio review. Syncs preserve the last good snapshot on errors and prices show their source/date.
+The repository has a React dashboard, FastAPI API, SQLite storage, read-only Kite portfolio sync, a separate editable manual-position ledger, CSV import/export and bulk edits, portfolio summary/holdings/SIP/source/export endpoints, import preview/commit endpoints, and a Streamlit token setup UI. Settings include manual-import visibility, Zerodha refresh behavior, local Ollama endpoint/model, and optional Yahoo daily-close refresh. The UI also includes a source split, glossary, source activity, and local AI portfolio review. Syncs preserve the last good snapshot on errors and prices show their source/date.
 
 See the [detailed project plan](docs/project-plan.md) for the revised roadmap and [market-data source assessment](docs/market-data-sources.md) for the Personal/Yahoo distinction and data terms.
+
+For the separate non-Zerodha portfolio grid and CSV format, see the [manual portfolio editor guide](docs/manual-portfolio-editor.md).
 
 ## Stack
 

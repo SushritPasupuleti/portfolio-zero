@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from kiteconnect.exceptions import (
     KiteException,
     NetworkException,
@@ -13,7 +14,14 @@ from kiteconnect.exceptions import (
 )
 
 from .kite_adapter import SOURCE_NAME, SOURCE_TYPE, sync_portfolio
-from .models import ImportPreviewRequest, Preferences
+from .models import (
+    ImportPreviewRequest,
+    ManualPositionBulkEdit,
+    ManualPositionIds,
+    ManualPositionImport,
+    ManualPositionInput,
+    Preferences,
+)
 from .ollama_adapter import (
     OllamaUnavailable,
     generate_portfolio_insights,
@@ -21,19 +29,24 @@ from .ollama_adapter import (
     validate_ollama_endpoint,
 )
 from .storage import (
+    bulk_edit_manual_positions,
     calculate_allocations,
     calculate_summary,
     clear_local_data,
+    delete_manual_positions,
     delete_zerodha_token,
     get_holdings,
     get_preferences,
     get_sips,
     get_sources,
     get_zerodha_token,
+    import_manual_positions,
     initialize_db,
     insert_import_record,
+    list_manual_positions,
     persist_holdings,
     persist_sips,
+    save_manual_positions,
     save_preferences,
     save_zerodha_token,
     upsert_source_status,
@@ -516,3 +529,88 @@ def portfolio_sips() -> dict[str, list[dict]]:
             for sip in get_sips(include_manual=preferences.show_manual_imports)
         ]
     }
+
+
+@app.get("/api/manual-portfolio")
+def manual_portfolio() -> dict[str, list[dict[str, object]]]:
+    return {"items": list_manual_positions()}
+
+
+@app.put("/api/manual-portfolio")
+def save_manual_portfolio(items: list[ManualPositionInput]) -> dict[str, object]:
+    saved = save_manual_positions(items)
+    return {"saved": saved, "items": list_manual_positions()}
+
+
+@app.patch("/api/manual-portfolio/bulk")
+def bulk_edit_portfolio(payload: ManualPositionBulkEdit) -> dict[str, int]:
+    if payload.source is not None and not payload.source.strip():
+        raise HTTPException(status_code=422, detail="Source cannot be blank.")
+    changed = bulk_edit_manual_positions(
+        payload.ids,
+        market=payload.market,
+        source=payload.source.strip() if payload.source is not None else None,
+        asset_type=payload.asset_type,
+    )
+    return {"updated": changed}
+
+
+@app.post("/api/manual-portfolio/bulk-delete")
+def bulk_delete_portfolio(payload: ManualPositionIds) -> dict[str, int]:
+    return {"deleted": delete_manual_positions(payload.ids)}
+
+
+@app.get("/api/manual-portfolio/export")
+def export_manual_portfolio() -> Response:
+    output = io.StringIO()
+    fields = ["ticker", "units", "market", "buy_price", "current_price", "source", "asset_type"]
+    writer = csv.DictWriter(output, fieldnames=fields)
+    writer.writeheader()
+    for item in list_manual_positions():
+        writer.writerow({field: item.get(field) for field in fields})
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="manual-portfolio.csv"'},
+    )
+
+
+@app.post("/api/manual-portfolio/import")
+def import_manual_portfolio(payload: ManualPositionImport) -> dict[str, object]:
+    reader = csv.DictReader(io.StringIO(payload.csv_text.removeprefix("\ufeff")))
+    required = {"ticker", "units", "market", "buy_price", "source", "asset_type"}
+    headers = {name.strip().lower() for name in reader.fieldnames or []}
+    if not required.issubset(headers):
+        missing = ", ".join(sorted(required - headers))
+        raise HTTPException(status_code=422, detail=f"CSV is missing required columns: {missing}")
+    rows: list[ManualPositionInput] = []
+    errors: list[str] = []
+    for line_number, raw_row in enumerate(reader, start=2):
+        row = {
+            str(key).strip().lower(): (value or "").strip()
+            for key, value in raw_row.items()
+            if key
+        }
+        try:
+            rows.append(
+                ManualPositionInput(
+                    ticker=row.get("ticker", ""),
+                    units=float(row.get("units", "")),
+                    market=row.get("market", "").upper(),
+                    buy_price=float(row.get("buy_price", "")),
+                    current_price=float(row["current_price"]) if row.get("current_price") else None,
+                    source=row.get("source", ""),
+                    asset_type=row.get("asset_type", "").lower(),
+                )
+            )
+        except (ValueError, TypeError) as exc:
+            errors.append(f"Row {line_number}: invalid field value ({exc}).")
+    if not rows:
+        raise HTTPException(status_code=422, detail="No valid position rows were found in the CSV.")
+    if payload.replace_existing and errors:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Replace was cancelled because {len(errors)} CSV row(s) are invalid.",
+        )
+    imported = import_manual_positions(rows, payload.replace_existing)
+    return {"imported": imported, "skipped": len(errors), "warnings": errors[:50]}

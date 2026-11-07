@@ -8,7 +8,7 @@ The `yfinance` library is Apache-2.0, but that license covers the client code, n
 
 Use Zerodha's mutual-fund holdings and SIP reads for account-specific units, cost, and schedules. Use the NAV and NAV date returned with those account records when present. [AMFI's official NAV download](https://www.amfiindia.com/net-asset-value/nav-download) can be an optional fallback for missing NAV values; match by ISIN and preserve its date/source.
 
-The current dashboard sync uses broker-reported `last_price` fields returned with Kite portfolio records for snapshot valuation. These are not fetched through the dedicated quote APIs and are not represented as a live stream. An optional yfinance adapter updates raw daily closes for mapped Zerodha NSE/BSE equity holdings. It is disabled by default and requires both an enable toggle and the user's permission acknowledgment; automatic refresh also has a separate toggle. Mutual funds and derivatives are not priced by this adapter.
+The current dashboard sync uses broker-reported `last_price` fields returned with Kite portfolio records for snapshot valuation. These are not fetched through the dedicated quote APIs and are not represented as a live stream. An optional yfinance adapter updates raw daily closes for mapped Zerodha NSE/BSE equity holdings and manually entered NSE/BSE/NYSE stock or ETF positions. It is disabled by default and requires both an enable toggle and the user's permission acknowledgment; automatic refresh also has a separate toggle. Mutual funds and derivatives are not priced by this adapter.
 
 ## Keep the sources distinct
 

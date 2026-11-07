@@ -7,7 +7,15 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import AllocationBucket, Holding, PortfolioSummary, Preferences, Sip, SourceStatus
+from .models import (
+    AllocationBucket,
+    Holding,
+    ManualPositionInput,
+    PortfolioSummary,
+    Preferences,
+    Sip,
+    SourceStatus,
+)
 from .secrets import delete_secret, get_secret, save_secret
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "portfolio_puffin.db"
@@ -136,6 +144,24 @@ def initialize_db() -> None:
             CREATE TABLE IF NOT EXISTS preferences (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS manual_positions (
+                id TEXT PRIMARY KEY,
+                ticker TEXT NOT NULL,
+                units REAL NOT NULL,
+                market TEXT NOT NULL,
+                buy_price REAL NOT NULL,
+                current_price REAL,
+                price_as_of TEXT,
+                price_source TEXT,
+                source TEXT NOT NULL,
+                asset_type TEXT NOT NULL,
+                created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
@@ -290,7 +316,154 @@ def upsert_source_status(
 def _is_manual_source(source_name: str) -> bool:
     normalized = source_name.casefold()
     manual_names = {"manual", "manual-import", "csv-import", "sample-import"}
-    return normalized in manual_names or normalized.startswith("manual-")
+    return (
+        normalized in manual_names
+        or normalized.startswith("manual-")
+        or normalized.startswith("manual · ")
+    )
+
+
+def list_manual_positions() -> list[dict[str, object]]:
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT * FROM manual_positions ORDER BY ticker COLLATE NOCASE, source COLLATE NOCASE"
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def manual_positions_as_holdings() -> list[Holding]:
+    holdings: list[Holding] = []
+    for row in list_manual_positions():
+        units = float(row["units"])
+        price = row["current_price"]
+        basis = float(row["buy_price"])
+        asset_type = str(row["asset_type"])
+        holdings.append(
+            Holding(
+                id=f"manual-position:{row['id']}",
+                instrument_name=str(row["ticker"]),
+                asset_class={"stock": "equity", "mf": "mutual_fund"}.get(
+                    asset_type, asset_type
+                ),
+                symbol=str(row["ticker"]),
+                quantity=units,
+                average_cost=basis,
+                last_price=float(price) if price is not None else None,
+                value=float(price) * units if price is not None else None,
+                pnl=(float(price) - basis) * units if price is not None else None,
+                price_as_of=_from_db(row["price_as_of"]),
+                price_source=row["price_source"],
+                currency="USD" if row["market"] == "NYSE" else "INR",
+                source=f"Manual · {row['source']}",
+                as_of=_from_db(row["updated_at"]),
+            )
+        )
+    return holdings
+
+
+def save_manual_positions(items: list[ManualPositionInput]) -> int:
+    now = _utc_iso(datetime.now(UTC))
+    with get_connection() as connection:
+        for item in items:
+            _upsert_manual_position(connection, item, now)
+    return len(items)
+
+
+def _upsert_manual_position(
+    connection: sqlite3.Connection, item: ManualPositionInput, now: str | None
+) -> None:
+    position_id = item.id or str(uuid.uuid4())
+    connection.execute(
+        """
+        INSERT INTO manual_positions (
+            id, ticker, units, market, buy_price, current_price, source,
+            asset_type, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            current_price = CASE
+                WHEN manual_positions.ticker != excluded.ticker
+                    OR manual_positions.market != excluded.market
+                THEN NULL
+                ELSE excluded.current_price
+            END,
+            price_as_of = CASE
+                WHEN manual_positions.ticker != excluded.ticker
+                    OR manual_positions.market != excluded.market
+                THEN NULL
+                ELSE manual_positions.price_as_of
+            END,
+            price_source = CASE
+                WHEN manual_positions.ticker != excluded.ticker
+                    OR manual_positions.market != excluded.market
+                THEN NULL
+                ELSE manual_positions.price_source
+            END,
+            ticker = excluded.ticker,
+            units = excluded.units,
+            market = excluded.market,
+            buy_price = excluded.buy_price,
+            source = excluded.source,
+            asset_type = excluded.asset_type,
+            updated_at = excluded.updated_at
+        """,
+        (
+            position_id,
+            item.ticker.strip().upper(),
+            item.units,
+            item.market,
+            item.buy_price,
+            item.current_price,
+            item.source.strip(),
+            item.asset_type,
+            now,
+            now,
+        ),
+    )
+
+
+def bulk_edit_manual_positions(
+    ids: list[str], *, market: str | None, source: str | None, asset_type: str | None
+) -> int:
+    changes = {"market": market, "source": source, "asset_type": asset_type}
+    changes = {key: value for key, value in changes.items() if value is not None}
+    if not changes:
+        return 0
+    assignments = ", ".join(f"{key} = ?" for key in changes)
+    if market is not None:
+        assignments += ", current_price = NULL, price_as_of = NULL, price_source = NULL"
+    placeholders = ", ".join("?" for _ in ids)
+    values = list(changes.values()) + [_utc_iso(datetime.now(UTC)), *ids]
+    with get_connection() as connection:
+        cursor = connection.execute(
+            f"UPDATE manual_positions SET {assignments}, updated_at = ? "
+            f"WHERE id IN ({placeholders})",
+            values,
+        )
+    return cursor.rowcount
+
+
+def delete_manual_positions(ids: list[str] | None = None) -> int:
+    with get_connection() as connection:
+        if ids is None:
+            cursor = connection.execute("DELETE FROM manual_positions")
+        elif ids:
+            placeholders = ", ".join("?" for _ in ids)
+            cursor = connection.execute(
+                f"DELETE FROM manual_positions WHERE id IN ({placeholders})", ids
+            )
+        else:
+            return 0
+    return cursor.rowcount
+
+
+def import_manual_positions(items: list[ManualPositionInput], replace_existing: bool) -> int:
+    now = _utc_iso(datetime.now(UTC))
+    with get_connection() as connection:
+        if replace_existing:
+            connection.execute("DELETE FROM manual_positions")
+        for item in items:
+            _upsert_manual_position(connection, item.model_copy(update={"id": None}), now)
+    return len(items)
 
 
 def get_sources(include_manual: bool = True) -> list[SourceStatus]:
@@ -370,6 +543,8 @@ def get_holdings(include_manual: bool = True) -> list[Holding]:
         )
         for row in rows
     ]
+    if include_manual:
+        holdings.extend(manual_positions_as_holdings())
     return [
         holding
         for holding in holdings
@@ -425,21 +600,22 @@ def calculate_summary(include_manual: bool = True) -> PortfolioSummary:
             warnings=["No holdings have been imported yet."],
         )
 
+    inr_rows = [holding for holding in rows if holding.currency == "INR"]
     total_value = sum(
-        (holding.value for holding in rows if holding.value is not None),
+        (holding.value for holding in inr_rows if holding.value is not None),
         0.0,
     )
     invested = sum(
         (
             (holding.quantity or 0.0) * (holding.average_cost or 0.0)
-            for holding in rows
+            for holding in inr_rows
             if holding.quantity is not None and holding.average_cost is not None
         ),
         0.0,
     )
-    pnl = sum((holding.pnl for holding in rows if holding.pnl is not None), 0.0)
+    pnl = sum((holding.pnl for holding in inr_rows if holding.pnl is not None), 0.0)
     as_of = max(
-        (holding.as_of for holding in rows if holding.as_of is not None),
+        (holding.as_of for holding in inr_rows if holding.as_of is not None),
         default=None,
     )
 
@@ -450,6 +626,11 @@ def calculate_summary(include_manual: bool = True) -> PortfolioSummary:
         warnings.append("Some holdings are missing a value or as-of timestamp.")
     if any(holding.last_price is None for holding in rows):
         warnings.append("Some prices are unavailable.")
+    if len(inr_rows) != len(rows):
+        status = "partial"
+        warnings.append(
+            "Non-INR holdings are excluded from INR totals until currency conversion is configured."
+        )
 
     return PortfolioSummary(
         total_value=total_value if total_value else None,
@@ -465,7 +646,11 @@ def calculate_summary(include_manual: bool = True) -> PortfolioSummary:
 
 
 def calculate_allocations(include_manual: bool = True) -> list[AllocationBucket]:
-    holdings = get_holdings(include_manual=include_manual)
+    holdings = [
+        holding
+        for holding in get_holdings(include_manual=include_manual)
+        if holding.currency == "INR"
+    ]
     if not holdings:
         return []
 
@@ -716,6 +901,20 @@ def update_market_prices(prices: dict[str, dict[str, object]], source: str) -> i
             price_date = _utc_iso(_coerce_datetime(quote.get("price_as_of")))
             if close is None or price_date is None:
                 continue
+            if holding_id.startswith("manual-position:"):
+                cursor = connection.execute(
+                    """UPDATE manual_positions SET current_price = ?, price_as_of = ?,
+                       price_source = ?, updated_at = ? WHERE id = ?""",
+                    (
+                        close,
+                        price_date,
+                        source,
+                        _utc_iso(datetime.now(UTC)),
+                        holding_id.removeprefix("manual-position:"),
+                    ),
+                )
+                updated += cursor.rowcount
+                continue
             cursor = connection.execute(
                 """
                 UPDATE holdings
@@ -742,6 +941,7 @@ def clear_local_data() -> None:
         connection.execute("DELETE FROM sources")
         connection.execute("DELETE FROM imports")
         connection.execute("DELETE FROM preferences")
+        connection.execute("DELETE FROM manual_positions")
         connection.execute("DELETE FROM app_settings")
 
 

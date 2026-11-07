@@ -85,12 +85,14 @@ def generate_portfolio_insights(
         {
             "instrument": item.instrument_name,
             "symbol": item.symbol,
+            "holding_source": item.source,
             "asset_class": item.asset_class,
             "quantity": item.quantity,
             "average_cost": item.average_cost,
             "last_price": item.last_price,
             "value": item.value,
             "pnl": item.pnl,
+            "currency": item.currency,
             "price_source": item.price_source,
             "price_as_of": item.price_as_of.isoformat() if item.price_as_of else None,
         }
@@ -103,6 +105,7 @@ def generate_portfolio_insights(
         "You are a local portfolio explainer. Use only the provided portfolio snapshot. "
         "Do not predict returns or recommend specific securities, buys, sells, or trades. "
         "Identify concentration, missing/stale prices, exposure mix, and data limitations. "
+        "Amounts may be in different currencies; do not add or compare unlike currencies. "
         "Every observation must cite values or instruments in the supplied data. "
         "Return JSON with keys summary (string) and insights (array of objects with "
         "title, detail, evidence, and type). Keep it concise and state that the snapshot "

@@ -59,8 +59,8 @@ Optional local Gemma analysis may summarize allocation, concentration, and chang
 
 | Area | Present now | Still required |
 | --- | --- | --- |
-| Frontend | React/Vite overview, holdings, activity, AI review, glossary, saved settings, Zerodha sync, price provenance | CSV file-picker/parser flow, charts with text summaries, responsive/accessibility review |
-| API | FastAPI read-only Kite adapter, SQLite preferences/portfolio, Ollama model discovery/review, gated yfinance price sync, import preview/commit | Versioned migrations, snapshot history, richer provider recovery |
+| Frontend | React/Vite overview, holdings, separate editable manual ledger, source split, activity, AI review, glossary, saved settings, CSV controls, Zerodha sync, price provenance | Charts with text summaries, responsive/accessibility review |
+| API | FastAPI read-only Kite adapter, separate SQLite manual positions, CRUD/bulk edit/delete and CSV import/export APIs, Ollama review, gated yfinance price sync | Versioned migrations, snapshot history, richer provider recovery |
 | Python | `uv`, `pyproject.toml`, locked yfinance dependency, Docker build, Make targets | Application hardening and dependency maintenance |
 | Runtime | Docker Compose, loopback-bound ports, Vite API proxy, local Streamlit token UI | Health checks, persistent encrypted store, backup/restore, robust lifecycle/recovery |
 | Zerodha | `kiteconnect` dependency; local Streamlit token exchange/save UI; token status check; read-only Personal holdings/positions/MF/SIP sync | Verify live endpoint permissions and add richer partial-source recovery |
@@ -68,7 +68,7 @@ Optional local Gemma analysis may summarize allocation, concentration, and chang
 | AI | Configurable local Ollama endpoint/model, installed-model discovery, grounded snapshot insight endpoint and UI | Review summary persistence/history, larger fixture/quality review |
 | Quality | API test cases exist for health, token status/save, imports, and summary | Run/expand checks for real adapters, storage security, calculations, and manual accessibility review |
 
-The dashboard syncs read-only Kite holdings, net positions, mutual-fund holdings, and SIP schedules through the backend and stores the latest successful snapshot locally. Token credentials use the local secret-store layer. SQLite preferences control manual-row visibility, Zerodha startup sync, local Ollama endpoint/model, and the optional yfinance integration. Yahoo refresh remains off until both enablement and permission acknowledgment are saved. Manual normalized imports can be stored through the API, but a CSV parser/file-import UI is still outstanding.
+The dashboard syncs read-only Kite holdings, net positions, mutual-fund holdings, and SIP schedules through the backend and stores the latest successful snapshot locally. Token credentials use the local secret-store layer. SQLite preferences control manual-row visibility, Zerodha startup sync, local Ollama endpoint/model, and optional yfinance refresh. The separate manual portfolio editor stores non-Zerodha positions in its own SQLite table, supports CSV import/export, inline edits, and bulk source/market/type changes. Manual rows feed portfolio summaries, allocation, local AI analysis, and the homepage source split when manual visibility is enabled. Yahoo refresh remains off until enablement and permission acknowledgment are saved.
 
 ## 5. Source and pricing decisions
 
@@ -207,8 +207,10 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 - [ ] Replace token-configured as a proxy for connection with API-backed sync/source status; a saved token alone must not be presented as a live portfolio connection.
 - [ ] Render summary values only when they trace to real Zerodha snapshots or a reviewed import; distinguish imported test/sample records from live broker data.
 - [x] Add holdings and SIP views plus asset allocation overview.
+- [x] Show a homepage portfolio split by source and native currency.
 - [ ] Build allocation by asset class/instrument and configurable concentration cues.
-- [ ] Show amount, quantity/units, cost, price/NAV, value, P&L, source, and date at the level supported by the data.
+- [x] Show amount, quantity/units, cost, price/NAV, value, P&L, source, and date at the level supported by the data.
+- [x] Keep foreign-currency manual positions separate from INR totals until currency conversion is configured.
 - [x] Add refresh feedback and source activity with last success/attempt, stale, and partial states.
 - [x] Add persisted manual-import visibility, auto-sync, and local AI/market-data settings.
 - [x] Add searchable glossary and local AI portfolio snapshot review.
@@ -219,7 +221,10 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 ### Phase 5 — Manual imports and historical backfill
 
 - [ ] Select supported Zerodha holdings/ledger/tradebook and Coin statement exports using sanitized examples.
-- [ ] Parse previews with schema detection, strict size/type limits, row validation, duplicates, and source-date checks.
+- [x] Import and export the manual ledger as CSV with required-column checks, row validation, a file-size limit, and append or all-valid replace mode.
+- [x] Edit manual positions inline in a grid and bulk change market, source, or asset type; bulk delete selected rows.
+- [x] Keep manual editor rows in a separate SQLite table from broker snapshots while including them in analysis under the manual visibility preference.
+- [ ] Add file parser preview for broker statements with schema detection, duplicate reconciliation, and source-date checks.
 - [ ] Preserve the last good snapshot unless the user reviews and commits a valid replacement/import.
 - [ ] Reconcile imports against current Personal holdings; show unmatched, duplicated, missing, and conflicting rows without silently merging.
 - [ ] Use complete transactions/cash flows and dated holdings to backfill historical performance. Keep incompleteness explicit.

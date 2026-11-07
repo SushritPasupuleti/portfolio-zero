@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.storage import get_connection, get_zerodha_token
 
 client = TestClient(app)
 
@@ -36,9 +37,28 @@ def test_token_status_and_save_workflow():
     assert save.status_code == 200
     assert save.json()["configured"] is True
 
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT key FROM app_settings WHERE key IN (?, ?)",
+            ("zerodha_access_token", "zerodha_api_key"),
+        ).fetchall()
+    assert rows == []
+
+    stored = get_zerodha_token()
+    assert stored["access_token"] == "test-token-123"
+    assert stored["api_key"] == "test-key"
+
     refreshed = client.get("/api/token/status")
     assert refreshed.status_code == 200
     assert refreshed.json()["configured"] is True
+    assert refreshed.json()["state"] == "token_configured"
+
+    connection_status = client.get("/api/connection/status")
+    assert connection_status.status_code == 200
+    payload = connection_status.json()
+    assert payload["provider"] == "zerodha_personal"
+    assert payload["market_data_provider"] == "yfinance"
+    assert payload["market_data_permission_state"] == "pending_terms_review"
 
 
 def test_import_preview_and_commit_round_trip():

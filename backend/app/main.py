@@ -52,19 +52,52 @@ def health() -> dict[str, str]:
 @app.get("/api/token/status")
 def token_status() -> dict[str, object]:
     token = get_zerodha_token()
-    if token.get("access_token"):
+    configured = bool(token.get("access_token"))
+    if configured:
         return {
             "configured": True,
-            "message": "Zerodha access token is configured locally.",
+            "state": "token_configured",
+            "message": "Zerodha Personal token is stored in a local secure secret store.",
             "api_key": bool(token.get("api_key")),
         }
     return {
         "configured": False,
+        "state": "not_configured",
         "message": (
-            "Zerodha access token is missing. Open the internal Streamlit token "
-            "setup tool and save a token to SQLite."
+            "Zerodha Personal access token is missing. Open the internal "
+            "Streamlit setup page to create a fresh local token."
         ),
         "api_key": False,
+    }
+
+
+@app.get("/api/connection/status")
+def connection_status() -> dict[str, object]:
+    token = get_zerodha_token()
+    configured = bool(token.get("access_token"))
+    if not configured:
+        return {
+            "provider": "zerodha_personal",
+            "state": "not_configured",
+            "token_configured": False,
+            "market_data_provider": "yfinance",
+            "market_data_permission_state": "pending_terms_review",
+            "connected": False,
+            "warnings": [
+                "No Zerodha Personal token is configured yet. Broker reads are not active."
+            ],
+        }
+    return {
+        "provider": "zerodha_personal",
+        "state": "token_configured",
+        "token_configured": True,
+        "market_data_provider": "yfinance",
+        "market_data_permission_state": "pending_terms_review",
+        "connected": False,
+        "warnings": [
+            "The app is ready to connect, but the real Kite adapter and price sync are not yet active.",
+            "Yahoo Finance is a daily-close, personal-use candidate; confirm permission before automated downloads.",
+        ],
     }
 
 

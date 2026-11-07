@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .models import AllocationBucket, Holding, PortfolioSummary, Sip, SourceStatus
+from .secrets import delete_secret, get_secret, save_secret
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "portfolio_puffin.db"
 
@@ -35,6 +36,44 @@ def get_connection() -> sqlite3.Connection:
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
     return connection
+
+
+def save_app_setting(key: str, value: str) -> None:
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT INTO app_settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            """,
+            (key, value, _utc_iso(datetime.now(UTC))),
+        )
+
+
+def get_app_setting(key: str) -> str | None:
+    with get_connection() as connection:
+        row = connection.execute(
+            "SELECT value FROM app_settings WHERE key = ?",
+            (key,),
+        ).fetchone()
+    return row["value"] if row else None
+
+
+def _migrate_legacy_tokens() -> None:
+    legacy_access = get_app_setting("zerodha_access_token")
+    legacy_api_key = get_app_setting("zerodha_api_key")
+    if legacy_access:
+        save_secret("zerodha_access_token", legacy_access)
+    if legacy_api_key:
+        save_secret("zerodha_api_key", legacy_api_key)
+    if legacy_access or legacy_api_key:
+        with get_connection() as connection:
+            connection.execute(
+                "DELETE FROM app_settings WHERE key IN (?, ?)",
+                ("zerodha_access_token", "zerodha_api_key"),
+            )
 
 
 def initialize_db() -> None:
@@ -108,45 +147,29 @@ def initialize_db() -> None:
             )
             """
         )
-
-
-def save_app_setting(key: str, value: str) -> None:
-    with get_connection() as connection:
-        connection.execute(
-            """
-            INSERT INTO app_settings (key, value, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = excluded.updated_at
-            """,
-            (key, value, _utc_iso(datetime.now(UTC))),
-        )
-
-
-def get_app_setting(key: str) -> str | None:
-    with get_connection() as connection:
-        row = connection.execute(
-            "SELECT value FROM app_settings WHERE key = ?",
-            (key,),
-        ).fetchone()
-    return row["value"] if row else None
+    _migrate_legacy_tokens()
 
 
 def save_zerodha_token(access_token: str, api_key: str | None = None) -> None:
-    save_app_setting("zerodha_access_token", access_token)
+    save_secret("zerodha_access_token", access_token)
     if api_key:
-        save_app_setting("zerodha_api_key", api_key)
+        save_secret("zerodha_api_key", api_key)
 
 
 def get_zerodha_token() -> dict[str, str]:
+    legacy_access = get_app_setting("zerodha_access_token")
+    legacy_api_key = get_app_setting("zerodha_api_key")
+    if legacy_access or legacy_api_key:
+        _migrate_legacy_tokens()
     return {
-        "access_token": get_app_setting("zerodha_access_token") or "",
-        "api_key": get_app_setting("zerodha_api_key") or "",
+        "access_token": get_secret("zerodha_access_token"),
+        "api_key": get_secret("zerodha_api_key"),
     }
 
 
 def delete_zerodha_token() -> None:
+    delete_secret("zerodha_access_token")
+    delete_secret("zerodha_api_key")
     with get_connection() as connection:
         connection.execute(
             "DELETE FROM app_settings WHERE key IN (?, ?)",

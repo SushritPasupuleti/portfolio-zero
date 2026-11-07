@@ -25,6 +25,7 @@ type PortfolioSummary = {
 
 type TokenStatus = {
   configured: boolean;
+  state?: string;
   message: string;
   api_key: boolean;
 };
@@ -75,7 +76,7 @@ function App() {
       setTokenStatus(payload);
       return payload;
     } catch {
-      const fallback = { configured: false, message: 'Token status is unavailable.', api_key: false };
+      const fallback = { configured: false, state: 'not_configured', message: 'Token status is unavailable.', api_key: false };
       setTokenStatus(fallback);
       return fallback;
     }
@@ -87,7 +88,7 @@ function App() {
       const response = await fetch('/api/health');
       if (!response.ok) throw new Error('API unavailable');
       setApiHealth('connected');
-      setNotice('Local API is responding. Connect a read-only data source to load your portfolio.');
+      setNotice('Local API is responding. Connect a read-only Zerodha Personal source to load your portfolio.');
       await loadSummary();
       const nextTokenStatus = await loadTokenStatus();
       if (!nextTokenStatus.configured) {
@@ -153,7 +154,7 @@ function App() {
             <section className="panel" aria-labelledby="setup-heading">
               <div className="panel-heading"><div><h2 id="setup-heading">Setup required</h2><p className="section-subtitle">The app needs a local Zerodha access token before it can load holdings.</p></div></div>
               <p>{tokenStatus.message}</p>
-              <p>Open the internal Streamlit setup UI with <code>make token-ui</code> and save a fresh token to SQLite.</p>
+              <p>Open the internal Streamlit setup UI with <code>make token-ui</code> and save a fresh token to the local secure secret store.</p>
             </section>
           )}
 

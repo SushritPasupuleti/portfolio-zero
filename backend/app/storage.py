@@ -114,12 +114,19 @@ def initialize_db() -> None:
                 last_price REAL,
                 value REAL,
                 pnl REAL,
+                price_as_of TEXT,
                 currency TEXT NOT NULL DEFAULT 'INR',
                 source_name TEXT NOT NULL,
                 as_of TEXT NOT NULL
             )
             """
         )
+        holding_columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(holdings)").fetchall()
+        }
+        if "price_as_of" not in holding_columns:
+            connection.execute("ALTER TABLE holdings ADD COLUMN price_as_of TEXT")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS sips (
@@ -213,7 +220,7 @@ def upsert_source_status(
                 last_attempted_refresh = excluded.last_attempted_refresh,
                 last_error = excluded.last_error,
                 currency = excluded.currency,
-                as_of = excluded.as_of,
+                as_of = COALESCE(excluded.as_of, sources.as_of),
                 status_message = excluded.status_message
             """,
             (
@@ -278,6 +285,7 @@ def get_holdings() -> list[Holding]:
                 last_price,
                 value,
                 pnl,
+                price_as_of,
                 currency,
                 source_name,
                 as_of
@@ -296,6 +304,7 @@ def get_holdings() -> list[Holding]:
             last_price=row["last_price"],
             value=row["value"],
             pnl=row["pnl"],
+            price_as_of=_from_db(row["price_as_of"]),
             currency=row["currency"],
             source=row["source_name"],
             as_of=_from_db(row["as_of"]),
@@ -466,6 +475,7 @@ def persist_holdings(rows: list[dict], source_name: str) -> int:
                 "last_price": _coerce_float(row.get("last_price")),
                 "value": _coerce_float(row.get("value")),
                 "pnl": _coerce_float(row.get("pnl")),
+                "price_as_of": _utc_iso(_coerce_datetime(row.get("price_as_of"))),
                 "currency": row.get("currency") or "INR",
                 "source_name": source_name,
                 "as_of": (
@@ -485,10 +495,11 @@ def persist_holdings(rows: list[dict], source_name: str) -> int:
                     last_price,
                     value,
                     pnl,
+                    price_as_of,
                     currency,
                     source_name,
                     as_of
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     instrument_name = excluded.instrument_name,
                     asset_class = excluded.asset_class,
@@ -498,6 +509,7 @@ def persist_holdings(rows: list[dict], source_name: str) -> int:
                     last_price = excluded.last_price,
                     value = excluded.value,
                     pnl = excluded.pnl,
+                    price_as_of = excluded.price_as_of,
                     currency = excluded.currency,
                     source_name = excluded.source_name,
                     as_of = excluded.as_of
@@ -512,6 +524,7 @@ def persist_holdings(rows: list[dict], source_name: str) -> int:
                     item["last_price"],
                     item["value"],
                     item["pnl"],
+                    item["price_as_of"],
                     item["currency"],
                     item["source_name"],
                     item["as_of"],
@@ -565,6 +578,64 @@ def persist_sips(rows: list[dict], source_name: str) -> int:
                 ),
             )
     return len(rows)
+
+
+def replace_source_snapshot(
+    holding_rows: list[dict],
+    sip_rows: list[dict],
+    source_name: str,
+) -> tuple[int, int]:
+    """Atomically replace one broker's latest holdings and SIP snapshot."""
+    now = _utc_iso(datetime.now(UTC))
+    with get_connection() as connection:
+        connection.execute("DELETE FROM holdings WHERE source_name = ?", (source_name,))
+        connection.execute("DELETE FROM sips WHERE source_name = ?", (source_name,))
+
+        for row in holding_rows:
+            connection.execute(
+                """
+                INSERT INTO holdings (
+                    id, instrument_name, asset_class, symbol, quantity, average_cost,
+                    last_price, value, pnl, price_as_of, currency, source_name, as_of
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row["instrument_name"],
+                    row["asset_class"],
+                    row.get("symbol"),
+                    _coerce_float(row.get("quantity")),
+                    _coerce_float(row.get("average_cost")),
+                    _coerce_float(row.get("last_price")),
+                    _coerce_float(row.get("value")),
+                    _coerce_float(row.get("pnl")),
+                    _utc_iso(_coerce_datetime(row.get("price_as_of"))),
+                    row.get("currency") or "INR",
+                    source_name,
+                    _utc_iso(_coerce_datetime(row.get("as_of"))) or now,
+                ),
+            )
+
+        for row in sip_rows:
+            connection.execute(
+                """
+                INSERT INTO sips (
+                    id, scheme_name, amount, frequency, next_date, status, source_name, as_of
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["id"],
+                    row["scheme_name"],
+                    _coerce_float(row.get("amount")),
+                    row.get("frequency"),
+                    _utc_iso(_coerce_datetime(row.get("next_date"))),
+                    row.get("status"),
+                    source_name,
+                    _utc_iso(_coerce_datetime(row.get("as_of"))) or now,
+                ),
+            )
+
+    return len(holding_rows), len(sip_rows)
 
 
 def clear_local_data() -> None:

@@ -5,7 +5,14 @@ from datetime import UTC, datetime
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from kiteconnect.exceptions import (
+    KiteException,
+    NetworkException,
+    PermissionException,
+    TokenException,
+)
 
+from .kite_adapter import SOURCE_NAME, SOURCE_TYPE, sync_portfolio
 from .models import ImportPreviewRequest
 from .storage import (
     calculate_allocations,
@@ -75,6 +82,7 @@ def token_status() -> dict[str, object]:
 def connection_status() -> dict[str, object]:
     token = get_zerodha_token()
     configured = bool(token.get("access_token"))
+    kite_source = next((source for source in get_sources() if source.source == SOURCE_NAME), None)
     if not configured:
         return {
             "provider": "zerodha_personal",
@@ -87,6 +95,19 @@ def connection_status() -> dict[str, object]:
                 "No Zerodha Personal token is configured yet. Broker reads are not active."
             ],
         }
+    if kite_source:
+        connected = kite_source.state == "connected"
+        return {
+            "provider": "zerodha_personal",
+            "state": kite_source.state,
+            "token_configured": True,
+            "market_data_provider": "yfinance",
+            "market_data_permission_state": "pending_terms_review",
+            "connected": connected,
+            "last_successful_refresh": kite_source.last_successful_refresh,
+            "as_of": kite_source.as_of,
+            "warnings": [kite_source.status_message] if kite_source.status_message else [],
+        }
     return {
         "provider": "zerodha_personal",
         "state": "token_configured",
@@ -95,10 +116,89 @@ def connection_status() -> dict[str, object]:
         "market_data_permission_state": "pending_terms_review",
         "connected": False,
         "warnings": [
-            "The app is ready to connect, but the real Kite adapter and price sync are not yet active.",
-            "Yahoo Finance is a daily-close, personal-use candidate; confirm permission before automated downloads.",
+            "A Kite token is saved. Sync the account to load the first local portfolio snapshot."
         ],
     }
+
+
+@app.post("/api/portfolio/sync")
+def sync_zerodha_portfolio() -> dict[str, int | str]:
+    credentials = get_zerodha_token()
+    api_key = credentials.get("api_key", "")
+    access_token = credentials.get("access_token", "")
+    if not api_key or not access_token:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "A Zerodha API key and access token are required. "
+                "Complete setup in the local token UI."
+            ),
+        )
+
+    try:
+        return sync_portfolio(api_key, access_token)
+    except TokenException as exc:
+        message = (
+            "The saved Kite access token is expired or invalid. "
+            "Generate a fresh token in the local setup UI."
+        )
+        upsert_source_status(
+            SOURCE_NAME,
+            SOURCE_TYPE,
+            "reauth_required",
+            last_error=message,
+            status_message=message,
+        )
+        raise HTTPException(status_code=401, detail=message) from exc
+    except PermissionException as exc:
+        message = (
+            "Kite denied a portfolio read. Check that the Personal app and linked account "
+            "are enabled."
+        )
+        upsert_source_status(
+            SOURCE_NAME,
+            SOURCE_TYPE,
+            "invalid",
+            last_error=message,
+            status_message=message,
+        )
+        raise HTTPException(status_code=403, detail=message) from exc
+    except NetworkException as exc:
+        message = "Kite could not be reached. The last successful local snapshot has been kept."
+        upsert_source_status(
+            SOURCE_NAME,
+            SOURCE_TYPE,
+            "stale",
+            last_error=message,
+            status_message=message,
+        )
+        raise HTTPException(status_code=503, detail=message) from exc
+    except KiteException as exc:
+        message = (
+            "Kite returned an error while syncing. "
+            "The last successful local snapshot has been kept."
+        )
+        upsert_source_status(
+            SOURCE_NAME,
+            SOURCE_TYPE,
+            "stale",
+            last_error=message,
+            status_message=message,
+        )
+        raise HTTPException(status_code=502, detail=message) from exc
+    except (ValueError, TypeError, KeyError) as exc:
+        message = (
+            "Kite returned data the portfolio sync could not interpret. "
+            "The last successful local snapshot has been kept."
+        )
+        upsert_source_status(
+            SOURCE_NAME,
+            SOURCE_TYPE,
+            "invalid",
+            last_error=message,
+            status_message=message,
+        )
+        raise HTTPException(status_code=502, detail=message) from exc
 
 
 @app.get("/api/portfolio/summary")
@@ -152,6 +252,7 @@ def export_portfolio_csv() -> dict[str, str]:
         "last_price",
         "value",
         "pnl",
+        "price_as_of",
         "currency",
         "source",
         "as_of",
@@ -166,6 +267,7 @@ def export_portfolio_csv() -> dict[str, str]:
             holding.last_price,
             holding.value,
             holding.pnl,
+            holding.price_as_of.isoformat() if holding.price_as_of else "",
             holding.currency,
             holding.source,
             holding.as_of.isoformat() if holding.as_of else "",

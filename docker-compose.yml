@@ -1,6 +1,8 @@
 services:
   api:
     build: ./backend
+    volumes:
+      - ./backend/data:/app/data
     environment:
       - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:11434}
       - LLM_MODEL=${LLM_MODEL:-gemma3:1b}

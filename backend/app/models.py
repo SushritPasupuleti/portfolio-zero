@@ -41,6 +41,7 @@ class Holding(BaseModel):
     last_price: float | None = None
     value: float | None = None
     pnl: float | None = None
+    price_as_of: datetime | None = None
     currency: str = "INR"
     source: str = "manual-import"
     as_of: datetime | None = None

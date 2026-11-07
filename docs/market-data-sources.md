@@ -8,13 +8,16 @@ The `yfinance` library is Apache-2.0, but that license covers the client code, n
 
 Use Zerodha's mutual-fund holdings and SIP reads for account-specific units, cost, and schedules. Use the NAV and NAV date returned with those account records when present. [AMFI's official NAV download](https://www.amfiindia.com/net-asset-value/nav-download) can be an optional fallback for missing NAV values; match by ISIN and preserve its date/source.
 
+The current dashboard sync uses broker-reported `last_price` fields returned with Kite portfolio records for snapshot valuation. These are not fetched through the dedicated quote APIs and are not represented as a live stream. Yahoo Finance history is not currently integrated; it remains subject to the permission gate below.
+
 ## Keep the sources distinct
 
 | Need | Source of truth | Freshness/limits |
 | --- | --- | --- |
 | Equity holdings, quantities, average prices, account positions | Zerodha Kite Personal APIs | Refreshed after daily login; account API response timestamp is stored |
 | Coin MF units, holdings, SIP schedule | Zerodha Kite Personal MF read APIs | Use returned NAV and `last_price_date` when provided; confirm endpoint availability on Personal during connector implementation |
-| Equity daily prices/history | Yahoo Finance via `yfinance`, subject to its automated-access terms | No API key for common use; unofficial/undocumented endpoints; cache and label actual market date; never claim live data |
+| Equity prices included in current portfolio snapshot | Zerodha Kite holdings/positions response | Broker-reported `last_price`; display returned value date where available; not a dedicated quote feed |
+| Equity daily prices/history | Yahoo Finance via `yfinance`, subject to its automated-access terms; not yet integrated | No API key for common use; unofficial/undocumented endpoints; cache and label actual market date; never claim live data |
 | MF NAV fallback | AMFI official NAV reports | Daily NAV publication; not intraday |
 | Live quotes/intraday candles | Not in initial scope | Kite Personal excludes the live and historical market-data products; `yfinance` is not treated as a supported live feed |
 

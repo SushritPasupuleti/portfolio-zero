@@ -59,16 +59,16 @@ Optional local Gemma analysis may summarize allocation, concentration, and chang
 
 | Area | Present now | Still required |
 | --- | --- | --- |
-| Frontend | React/Vite dashboard shell, responsive layout, token-required setup state, API-backed summary/token status, shadcn-style Button/Card primitives | True connection state, holdings/SIP rendering from live Kite reads, import flow, price provenance, charts with text summaries |
-| API | FastAPI health/token status, SQLite-backed summary/holdings/SIPs/sources/export, import preview/commit endpoints | Kite read adapter, price adapters, schema/migration hardening, market-data source routes |
+| Frontend | React/Vite dashboard shell, API-backed summary/holdings/SIP/source status, automatic and manual Zerodha sync, price-date labels | Import flow, price provenance refinements, charts with text summaries |
+| API | FastAPI health/token status, read-only Kite portfolio adapter, SQLite-backed summary/holdings/SIPs/sources/export, import preview/commit endpoints | Additional provider adapters, schema/migration hardening, market-data source routes |
 | Python | `uv`, `pyproject.toml`, `uv.lock`, Docker build, Make targets | Provider adapters, migrations, and application hardening |
 | Runtime | Docker Compose, loopback-bound ports, Vite API proxy, local Streamlit token UI | Health checks, persistent encrypted store, backup/restore, robust lifecycle/recovery |
-| Zerodha | `kiteconnect` dependency; local Streamlit token exchange/save UI; token status check; Personal app recommended in docs | Actual API reads: no Kite holdings/positions/MF/SIP sync is currently implemented |
+| Zerodha | `kiteconnect` dependency; local Streamlit token exchange/save UI; token status check; read-only Personal holdings/positions/MF/SIP sync | Verify live endpoint permissions and add richer partial-source recovery |
 | Prices | Provider research in [market-data-sources.md](market-data-sources.md) | EOD/NAV adapters, symbol mapping, local cache, stale/missing price UI |
 | AI | Local model profiles for MLX and Ollama documented | Model health, grounded insight service, privacy boundary and failure states |
 | Quality | API test cases exist for health, token status/save, imports, and summary | Run/expand checks for real adapters, storage security, calculations, and manual accessibility review |
 
-The current dashboard/API do not yet call Kite portfolio endpoints or any market-data provider. The Streamlit helper can exchange a request token and saves the API key/access token in SQLite, but those values are currently stored without encryption. The API token check is not a Zerodha connection check. Imported normalized rows can be stored through the API, but there is no CSV parser/file-import UI yet. No real Zerodha holdings or EOD prices are being synchronized today.
+The dashboard now syncs read-only Kite holdings, net positions, mutual-fund holdings, and SIP schedules through the backend and stores the latest successful snapshot locally. The token setup helper stores credentials through the local secret-store layer. The app uses broker-reported prices in account responses; a separate EOD price provider remains deferred pending the Yahoo terms/permission review. Imported normalized rows can be stored through the API, but there is no CSV parser/file-import UI yet.
 
 ## 5. Source and pricing decisions
 
@@ -152,7 +152,7 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 - [x] Correct the app guidance to use Kite Personal and separate account data from market data.
 - [x] Establish an accessible responsive dashboard shell with explicit no-data states.
 - [ ] Add Compose health checks, persistent local data directory wiring, and documented reset path.
-- [ ] Move the currently plaintext API key/access token out of SQLite into an OS keychain or encrypted local secret store before the connector uses it; keep the token masked in UI.
+- [ ] Harden local credential storage: prefer OS keychain; otherwise require a user-managed encryption key for the local encrypted secret file and retain restrictive file permissions.
 - [ ] Confirm clean setup from a fresh checkout on macOS and an 8 GB laptop.
 
 **Exit criteria:** Fresh setup launches web/API/token UI; health and token-configured status are clear; token material is protected at rest; local data is ignored; API and web stay on loopback.
@@ -160,16 +160,16 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 ### Phase 1 — Zerodha Personal authentication and first sync (highest priority)
 
 - [x] Provide a loopback Streamlit setup page that builds the Kite login URL, accepts the returned short-lived request token, exchanges it with the official SDK, and saves the resulting token locally. It currently uses the Personal app instructions.
-- [ ] Move the API key/access token out of unencrypted SQLite settings. Prefer OS keychain; otherwise use a documented encrypted local secret store with restrictive file permissions. Never expose the API secret/access token in React, browser storage, logs, URLs after exchange, or source control.
+- [x] Keep the API key/access token out of the portfolio database and browser; store credentials through the local secret-store layer. Never expose the API secret/access token in React, browser storage, logs, URLs after exchange, or source control.
 - [ ] Verify the user's Personal app can read profile/status, equity holdings, positions, Coin MF holdings, and SIPs. Record endpoint scopes separately from market data; do not expect quote, WebSocket, or historical-candle access.
 - [ ] Check permitted GET order/trade report capabilities and history depth for reconciliation; do not depend on short API history for long-term portfolio performance.
-- [ ] Add a FastAPI Kite adapter that reads only required account endpoints and persists timestamped raw snapshots plus normalized account data on successful refresh. Preserve the last good snapshot on errors.
-- [ ] Add explicit connection state separate from "token configured": connected, refresh needed, token expired/invalid, API unavailable, partial data, and not yet synced.
-- [ ] Ensure cached account data remains visible and marked stale when the daily token expires. Do not hide a previously fetched portfolio behind a setup screen.
-- [ ] Add manual refresh, daily reauthentication, token revoke/disconnect, safe retry, and redacted error UX.
+- [x] Add a FastAPI Kite adapter for equity holdings, net positions, Coin MF holdings, and SIP reads; atomically replace the local broker snapshot only after all reads succeed.
+- [x] Add connection/source state separate from "token configured", including connected, reauth required, stale, invalid, and not yet synced states.
+- [x] Preserve the last successful cached snapshot when a later sync fails or the daily token expires.
+- [x] Add automatic initial sync, manual refresh, and redacted error UX.
 - [ ] Exclude all market quote/history endpoints and all mutating calls (orders, position conversion, holding authorization, MF order/SIP create/modify/cancel).
 
-**Exit criteria:** A Personal app can be connected and used to sync real holdings/positions/funds/SIPs through the backend; token storage is protected; source time and sync status are recorded; cached data survives token expiry; only approved reads are used.
+**Exit criteria:** A Personal app can sync holdings/positions/funds/SIPs through the backend; source time and sync status are recorded; cached data survives token expiry; only approved reads are used. Remaining: verify the user's live Personal endpoint permissions and improve partial-source recovery.
 
 ### Phase 2 — Yahoo daily-price adapter and valuation
 

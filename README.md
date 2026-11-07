@@ -1,10 +1,10 @@
 # Portfolio Puffin
 
-A local-first, read-only portfolio dashboard. Zerodha Kite Connect Personal is the planned source for the user's account data; a separate end-of-day market-data source fills the price-data gap in Personal.
+A local-first, read-only portfolio dashboard. Zerodha Kite Connect Personal provides account holdings, positions, mutual-fund holdings, and SIP schedules. The dashboard uses broker-reported prices returned with the portfolio snapshot; separate historical market data is not integrated.
 
 ## Current state
 
-The repository has a React dashboard, FastAPI API, SQLite storage, portfolio summary/holdings/SIP/source/export endpoints, import preview/commit endpoints, and a Streamlit token setup UI. The token UI can exchange and save a Kite access token locally. **The API does not yet use that token to fetch real holdings, positions, mutual-fund holdings, or SIPs from Zerodha.** Imported records are not the same as a live broker connection. The dashboard must not be treated as showing a connected Zerodha portfolio until the connector phase is complete.
+The repository has a React dashboard, FastAPI API, SQLite storage, read-only Kite portfolio sync, portfolio summary/holdings/SIP/source/export endpoints, import preview/commit endpoints, and a Streamlit token setup UI. When a token is configured, the dashboard syncs on launch and from **Sync Zerodha**. Syncs fetch holdings, net positions, Coin MF holdings, and SIP schedules, then replace the previous Zerodha snapshot while preserving the last good snapshot on errors. Broker-reported price values are labeled with their returned date where available.
 
 See the [detailed project plan](docs/project-plan.md) for the revised roadmap and [market-data source assessment](docs/market-data-sources.md) for the Personal/Yahoo distinction and data terms.
 
@@ -20,7 +20,7 @@ See the [detailed project plan](docs/project-plan.md) for the revised roadmap an
 ## Prerequisites
 
 - Docker Desktop for the containerized setup
-- For native development: [`uv`](https://docs.astral.sh/uv/getting-started/installation/), Node.js/npm, and GNU Make
+- For native development: [`uv`](https://docs.astral.sh/uv/getting-started/installation/), Node.js 22/npm, and GNU Make. `frontend/.node-version` selects the matching Node version for fnm.
 - A local model is optional; see [infra/llm-profiles.md](infra/llm-profiles.md)
 
 ## Run with Docker
@@ -40,6 +40,22 @@ Install the Python and frontend dependencies once:
 make setup
 ```
 
+The Vite frontend requires Node.js 22 (the same major version used by the
+container). With [fnm](https://github.com/Schniz/fnm), run these commands from
+the repository root before `make setup`:
+
+```sh
+cd frontend
+fnm install
+fnm use
+cd ..
+make setup
+```
+
+Older Node versions can fail before Vite serves the page, which may look like a
+blank app. If your shell has fnm's directory auto-switching enabled, entering
+`frontend/` may select the pinned version automatically.
+
 Start the API and web app in separate terminals from the repository root:
 
 ```sh
@@ -56,7 +72,7 @@ Open <http://127.0.0.1:5173>. For the local Zerodha token setup page, run this i
 make token-ui
 ```
 
-Then open <http://127.0.0.1:8501>. Keep it on loopback. The token UI currently stores the access token and API key in the local SQLite settings table; the project plan includes moving token storage to an OS keychain or an encrypted local store before direct broker sync ships.
+Then open <http://127.0.0.1:8501>. Keep it on loopback. The token UI stores the API key and access token in the local secret store. Docker Compose mounts `backend/data` into the API container so the backend can read those local secrets and persist the portfolio snapshot.
 
 Python dependencies live in `backend/pyproject.toml` and `backend/uv.lock`. Use `make -C backend lock` after changing them.
 
@@ -64,11 +80,11 @@ Python dependencies live in `backend/pyproject.toml` and `backend/uv.lock`. Use 
 
 Choose **Personal** in the Kite Developer Console for this single-user portfolio app. Personal provides access to account and portfolio APIs, including holdings/positions/funds, while excluding the separate live quote, WebSocket, and historical market-data products. Those are different capabilities; lack of live quotes does **not** mean the app cannot read your portfolio.
 
-The token UI is not yet a portfolio connector. It obtains a daily access token, but actual API reads are the next implementation phase. See the [Zerodha token setup guide](docs/zerodha-token-setup.md). No order placement or account mutation will be implemented.
+The token UI obtains a daily access token. The React dashboard uses it through the backend for read-only portfolio sync. See the [Zerodha token setup guide](docs/zerodha-token-setup.md). No order placement or account mutation is implemented.
 
 ## Stock prices and NAV
 
-Use Zerodha as the source of what you own. The requested stock-price candidate is Yahoo Finance through `yfinance`, a free, no-key Python client for daily price history. `yfinance` is open-source, but it is not an official Yahoo API and does not license Yahoo's data. Yahoo's current terms prohibit automated data collection without prior permission, so confirm this use is permitted before enabling automatic downloads. Prices are daily, not live. Read [docs/market-data-sources.md](docs/market-data-sources.md) for the permission gate and fallbacks. For mutual funds, use NAV values returned with Zerodha's MF holdings; AMFI is a possible daily NAV fallback.
+Use Zerodha as the source of what you own. Current portfolio valuation uses the `last_price` returned with Kite holdings/positions and the latest NAV returned with Coin MF holdings; the UI labels the value date when supplied. Separate Yahoo Finance history through `yfinance` remains deferred: it is a free, no-key Python client but not an official Yahoo API, and automated collection needs permission under Yahoo's terms. Read [docs/market-data-sources.md](docs/market-data-sources.md) for the permission gate and fallback options. Prices in the current snapshot are broker-reported marks, not a dedicated live quote feed.
 
 ## Local model options
 

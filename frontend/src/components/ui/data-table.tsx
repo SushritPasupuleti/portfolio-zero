@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from 'react';
-import { ChevronLeft, ChevronRight, Search } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import { Button } from './button';
 import { Input } from './input';
 import { Select } from './select';
@@ -89,7 +89,7 @@ export function DataTable<T>({
           const activeSort = sort?.id === column.id;
           return <TableHead key={column.id} className={column.className} aria-sort={activeSort ? (sort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}>
             {column.sortValue ? <button className="data-table-sort" type="button" onClick={() => toggleSort(column)} aria-label={`Sort by ${String(column.header)}`}>
-              {column.header}<span aria-hidden="true">{activeSort ? (sort.direction === 'asc' ? '↑' : '↓') : '↕'}</span>
+              {column.header}<span aria-hidden="true">{activeSort ? (sort.direction === 'asc' ? <ArrowUp size={13}/> : <ArrowDown size={13}/>) : <ArrowUpDown size={13}/>}</span>
             </button> : column.header}
           </TableHead>;
         })}</TableRow></TableHeader>

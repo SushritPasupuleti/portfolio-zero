@@ -2,15 +2,21 @@ import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, Navigate, RouterProvider, useBlocker, useLocation, useNavigate } from 'react-router';
 import {
-  Activity, ArrowDownLeft, ArrowUpRight, BookOpen, Bot, BriefcaseBusiness,
-  ChartNoAxesCombined, Check, ChevronDown, CircleHelp, Download, Grid2X2,
+  Activity, ArrowUpRight, BookOpen, Bot, BriefcaseBusiness,
+  ChartNoAxesCombined, Check, CircleHelp, Download, Grid2X2,
   ExternalLink, Landmark, LayoutDashboard, Menu, Newspaper, Palette, Plus, RefreshCw, Search, Server, Settings2,
-  ShieldCheck, Trash2, Upload, WalletCards,
+  ShieldCheck, Trash2, Upload, WalletCards, X,
 } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
+import { Alert, AlertDescription, AlertTitle } from './components/ui/alert';
+import { AlertDialog } from './components/ui/alert-dialog';
 import { Card } from './components/ui/card';
+import { Collapsible } from './components/ui/collapsible';
 import { DataTable, type DataTableColumn } from './components/ui/data-table';
+import { Dialog } from './components/ui/dialog';
+import { Empty } from './components/ui/empty';
+import { Field } from './components/ui/field';
 import { Input } from './components/ui/input';
 import { Markdown } from './components/ui/markdown';
 import { Progress } from './components/ui/progress';
@@ -18,11 +24,15 @@ import { Select } from './components/ui/select';
 import { Switch } from './components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
 import { ToastViewport, type ToastItem } from './components/ui/toast';
+import { Skeleton } from './components/ui/skeleton';
+import { Tooltip } from './components/ui/tooltip';
+import { ZerodhaMark } from './components/ui/zerodha-mark';
 import './style.css';
 import './theme.css';
 
 type Health = 'checking' | 'connected' | 'unavailable';
 type Section = 'Overview' | 'Holdings' | 'Manual portfolio' | 'News & reports' | 'Activity' | 'AI insights' | 'Glossary' | 'Settings';
+type Confirmation = { title: string; description: string; confirmLabel: string; destructive?: boolean };
 
 type ManualPosition = {
   id: string;
@@ -262,6 +272,9 @@ function App() {
   const navigate = useNavigate();
   const [apiHealth, setApiHealth] = useState<Health>('checking');
   const activeSection = sectionFromPath(location.pathname);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const confirmationResolver = useRef<((confirmed: boolean) => void) | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const toastSequence = useRef(0);
@@ -306,6 +319,7 @@ function App() {
   const [manualBusy, setManualBusy] = useState(false);
   const [manualDirty, setManualDirty] = useState(false);
   const [manualSearch, setManualSearch] = useState('');
+  const [initialPortfolioLoading, setInitialPortfolioLoading] = useState(true);
   const navigationBlocker = useBlocker(({ currentLocation, nextLocation }) =>
     activeSection === 'Manual portfolio'
       && manualDirty
@@ -333,6 +347,20 @@ function App() {
 
   function dismissToast(id: number) {
     setToasts(items => items.filter(item => item.id !== id));
+  }
+
+  function askForConfirmation(options: Confirmation): Promise<boolean> {
+    return new Promise(resolve => {
+      confirmationResolver.current = resolve;
+      setConfirmation(options);
+    });
+  }
+
+  function resolveConfirmation(confirmed: boolean) {
+    const resolve = confirmationResolver.current;
+    confirmationResolver.current = null;
+    setConfirmation(null);
+    resolve?.(confirmed);
   }
   const sourceSplit = holdings.reduce<Record<string, { value: number; count: number; unpriced: number; currency: string }>>((groups, holding) => {
     const currency = holding.currency || 'INR';
@@ -667,7 +695,13 @@ function App() {
 
   async function deleteSelectedManualRows() {
     if (!selectedManualIds.length) return;
-    if (!window.confirm(`Delete ${selectedManualIds.length} selected manual row(s)?`)) return;
+    const confirmed = await askForConfirmation({
+      title: 'Delete selected positions?',
+      description: `${selectedManualIds.length} selected manual row(s) will be removed from this device. This cannot be undone.`,
+      confirmLabel: 'Delete positions',
+      destructive: true,
+    });
+    if (!confirmed) return;
     setManualBusy(true);
     try {
       const savedIds = selectedManualIds.filter(id => !id.startsWith('draft-'));
@@ -691,8 +725,17 @@ function App() {
   }
 
   async function importManualCsv(file: File) {
-    if (manualDirty && !window.confirm('Discard unsaved grid edits and continue with this CSV import?')) return;
-    if (csvMode === 'replace' && !window.confirm('Replace every saved manual position with rows from this CSV?')) return;
+    if (manualDirty && !await askForConfirmation({
+      title: 'Discard unsaved edits?',
+      description: 'The CSV import will discard changes that have not been saved in the manual positions grid.',
+      confirmLabel: 'Discard and import',
+    })) return;
+    if (csvMode === 'replace' && !await askForConfirmation({
+      title: 'Replace the manual portfolio?',
+      description: 'Saved manual positions will be replaced by the valid rows in this CSV. Zerodha data is not affected.',
+      confirmLabel: 'Replace positions',
+      destructive: true,
+    })) return;
     setManualBusy(true);
     try {
       const csvText = await file.text();
@@ -810,6 +853,7 @@ function App() {
         : 'The local API or Zerodha could not be reached.');
     } finally {
       setRefreshing(false);
+      setInitialPortfolioLoading(false);
     }
   }
 
@@ -951,11 +995,12 @@ function App() {
   }, [activeSection]);
   useEffect(() => {
     if (navigationBlocker.state !== 'blocked') return;
-    if (window.confirm('Discard unsaved manual portfolio edits and leave this view?')) {
-      navigationBlocker.proceed();
-    } else {
-      navigationBlocker.reset();
-    }
+    void askForConfirmation({
+      title: 'Leave without saving?',
+      description: 'Unsaved edits in the manual positions grid will be discarded.',
+      confirmLabel: 'Discard changes',
+      destructive: true,
+    }).then(confirmed => confirmed ? navigationBlocker.proceed() : navigationBlocker.reset());
   }, [navigationBlocker.state]);
 
   const openSection = (section: Section) => {
@@ -966,7 +1011,7 @@ function App() {
   function renderReportArchive(type: ReportType) {
     return <section className="panel report-archive">
       <div className="panel-heading"><div><h2>Saved {type === 'portfolio' ? 'portfolio reviews' : 'news reports'}</h2><p className="section-subtitle">Generated reports are stored locally in SQLite.</p></div><Button variant="outline" disabled={reportArchiveLoading} onClick={() => void loadReportArchive(type)}><RefreshCw size={14} className={reportArchiveLoading ? 'spin' : ''}/> Refresh</Button></div>
-      {reportArchive.length === 0 ? <p className="report-archive-empty">{reportArchiveLoading ? 'Loading saved reports…' : 'No saved reports yet. Generate a report to start your history.'}</p> : <div className="report-archive-list">{reportArchive.map(report => <Button variant="ghost" key={report.report_id} className={`report-archive-item ${selectedSavedReport?.report_id === report.report_id ? 'selected' : ''}`} onClick={() => void openSavedReport(report.report_id)}><span><strong>{reportTypeLabel(report.report_type)}</strong><small>{formatDate(report.saved_at)} · {report.model}</small></span><span className="report-open-label">Open report <ArrowUpRight size={14}/></span></Button>)}</div>}
+      {reportArchive.length === 0 ? <Empty title={reportArchiveLoading ? 'Loading saved reports' : 'No saved reports yet'} description={reportArchiveLoading ? 'Checking the local report archive…' : 'Generate an AI report to save it here for later review.'} /> : <div className="report-archive-list">{reportArchive.map(report => <Button variant="ghost" key={report.report_id} className={`report-archive-item ${selectedSavedReport?.report_id === report.report_id ? 'selected' : ''}`} onClick={() => void openSavedReport(report.report_id)}><span><strong>{reportTypeLabel(report.report_type)}</strong><small>{formatDate(report.saved_at)} · {report.model}</small></span><span className="report-open-label">Open report <ArrowUpRight size={14}/></span></Button>)}</div>}
       {selectedSavedReport?.report_type === type && <article className="saved-report-view"><div className="panel-heading"><div><h3>{reportTypeLabel(type)} · {selectedSavedReport.model}</h3><p className="section-subtitle">Saved {formatDate(selectedSavedReport.saved_at)} · {selectedSavedReport.scope}</p></div><Button variant="outline" onClick={() => exportMarkdownReport(selectedSavedReport)}><Download size={14}/> Export Markdown</Button></div><Markdown source={selectedSavedReport.markdown}/></article>}
     </section>;
   }
@@ -975,44 +1020,52 @@ function App() {
     <div className="app-frame">
       <a className="skip-link" href="#main-content">Skip to main content</a>
       <aside className="sidebar" aria-label="Main navigation">
-        <a className="brand" href="#main-content" aria-label="Puffin Portfolio home">
+        <a className="brand" href="#main-content" aria-label="Portfolio dashboard">
           <span className="brand-mark" aria-hidden="true"><ChartNoAxesCombined size={19} /></span>
           <span>puffin<span className="brand-light">folio</span></span>
         </a>
-        <div className="workspace-label">WORKSPACE</div>
+        <div className="workspace-label">PORTFOLIO</div>
         <nav className="nav-list" aria-label="Portfolio">
           {navigation.map(({ label, icon: Icon }) => (
-            <button key={label} className={`nav-item ${activeSection === label ? 'active' : ''}`} aria-label={label} aria-current={activeSection === label ? 'page' : undefined} onClick={() => openSection(label)}>
+            <button key={label} title={label} className={`nav-item ${activeSection === label ? 'active' : ''}`} aria-label={label} aria-current={activeSection === label ? 'page' : undefined} onClick={() => openSection(label)}>
               <Icon size={17} aria-hidden="true" /><span>{label}</span>
               {label === 'AI insights' && <span className="nav-soon">LOCAL</span>}
             </button>
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="privacy-card"><span className="privacy-icon"><ShieldCheck size={17} /></span><div><strong>Your data stays yours</strong><p>Stored and processed on this device.</p></div></div>
+          <div className="privacy-card"><span className="privacy-icon"><ShieldCheck size={17} /></span><div><strong>Local SQLite database</strong><p>Portfolio records stay here. Enabled providers receive their requests.</p></div></div>
           <button className="nav-item muted-nav" aria-label="Settings" onClick={() => openSection('Settings')}><Settings2 size={17} /><span>Settings</span></button>
           <button className="nav-item muted-nav" aria-label="Help and guides" onClick={() => openSection('Glossary')}><CircleHelp size={17} /><span>Help & guides</span></button>
-          <div className="user-row"><div className="avatar" aria-hidden="true">P</div><div className="user-text"><strong>Personal portfolio</strong><span>Local workspace</span></div><ChevronDown size={16} aria-hidden="true" /></div>
+          <p className="sidebar-storage">One device · No hosted account</p>
         </div>
       </aside>
 
+      <Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen} className="mobile-nav-sheet" labelledBy="mobile-navigation-title">
+        <div className="mobile-sheet-header"><div><p className="overline">LOCAL PORTFOLIO</p><h2 id="mobile-navigation-title">Navigation</h2></div><Button variant="ghost" className="icon-button" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)}><X size={18}/></Button></div>
+        <nav className="mobile-sheet-nav" aria-label="Portfolio sections">{navigation.map(({ label, icon: Icon }) => <Button key={label} variant="ghost" className={`mobile-sheet-item ${activeSection === label ? 'active' : ''}`} aria-current={activeSection === label ? 'page' : undefined} onClick={() => { openSection(label); setMobileNavOpen(false); }}><Icon size={17} aria-hidden="true"/><span>{label}</span>{label === 'AI insights' && <Badge variant="secondary">Local</Badge>}</Button>)}</nav>
+        <div className="mobile-sheet-footer"><Badge variant={apiHealth === 'connected' ? 'success' : apiHealth === 'unavailable' ? 'destructive' : 'outline'}>{apiHealth === 'connected' ? 'API connected' : apiHealth === 'checking' ? 'Connecting' : 'API offline'}</Badge><span>Portfolio data is stored in the local SQLite database.</span></div>
+      </Dialog>
+
       <main id="main-content" className="main-area" tabIndex={-1}>
         <header className="topbar">
-          <button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setNotice('Use the sidebar navigation to switch sections.')}><Menu size={19} /></button>
-          <div className="breadcrumb"><span>Workspace</span><span className="slash">/</span><strong>{activeSection}</strong></div>
+          <Button variant="ghost" className="mobile-menu icon-button" aria-label="Open navigation" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}><Menu size={19} /></Button>
+          <div className="breadcrumb"><span>Portfolio</span><span className="slash">/</span><strong>{activeSection}</strong></div>
           <div className="top-actions">
             {(aiLoading || newsReportLoading) && <div className="ai-progress" role="status" aria-live="polite" aria-atomic="true"><span className="ai-progress-label">{newsReportLoading ? 'Writing news report' : 'Reviewing portfolio'}</span><Progress label={newsReportLoading ? 'Writing a local AI news report' : 'Generating a local portfolio review'} /></div>}
             <label className="top-theme-control"><Palette size={15} aria-hidden="true"/><Select aria-label="Color theme" value={preferences?.theme ?? 'latte'} disabled={!preferences || themeSaving} onChange={event => void saveThemePreference(event.target.value as Preferences['theme'])}><optgroup label="Light themes">{themes.filter(theme => theme.mode === 'light').map(theme => <option key={theme.value} value={theme.value}>{theme.label}</option>)}</optgroup><optgroup label="Dark themes">{themes.filter(theme => theme.mode === 'dark').map(theme => <option key={theme.value} value={theme.value}>{theme.label}</option>)}</optgroup></Select></label>
-            <span className="local-pill"><span className={`status-dot ${apiHealth}`} />LOCAL MODE</span><button className="icon-button" aria-label="Open settings" onClick={() => openSection('Settings')}><Settings2 size={18} /></button>
+            <span className="local-pill" title="Local API connection status"><span className={`status-dot ${apiHealth}`} />{apiHealth === 'connected' ? 'LOCAL API' : apiHealth === 'checking' ? 'CONNECTING' : 'API OFFLINE'}</span><Button variant="ghost" className="icon-button" aria-label="Open settings" onClick={() => openSection('Settings')}><Settings2 size={18} /></Button>
           </div>
         </header>
 
         <div className="content-wrap">
           {activeSection === 'Manual portfolio' && <section className="manual-editor-page">
             <div className="welcome-row"><div><p className="overline">SEPARATE FROM ZERODHA</p><h1>Manual <em>portfolio.</em></h1><p className="welcome-copy">Track investments held on other apps. These rows live in a dedicated SQLite table and are included in portfolio analysis when manual imports are visible.</p>{manualDirty && <p className="unsaved-indicator">Unsaved grid edits</p>}</div><div className="manual-actions"><Button variant="outline" disabled={manualBusy || manualDirty} onClick={() => { window.location.href = '/api/manual-portfolio/export'; }}><Download size={15}/> Export CSV</Button><Button variant="outline" onClick={addManualPosition}><Plus size={15}/> Add row</Button><Button onClick={() => void saveManualPortfolio()} disabled={manualBusy || invalidManualRow}><Check size={15}/>{manualBusy ? 'Saving…' : 'Save edits'}</Button></div></div>
+            {invalidManualRow && <Alert variant="warning"><AlertTitle>Review the manual ledger</AlertTitle><AlertDescription>Every saved position needs a ticker and source, positive units, and a non-negative buy price.</AlertDescription></Alert>}
             <Card className="manual-import-card"><div className="manual-import-info"><strong>Import a CSV</strong><small>Required columns: ticker, units, market, buy_price, source, asset_type. current_price is optional.</small></div><Select value={csvMode} onChange={event => setCsvMode(event.target.value as 'append' | 'replace')} aria-label="CSV import mode"><option value="append">Append rows</option><option value="replace">Replace manual ledger</option></Select><label className="button button-outline csv-file-button"><Upload size={15}/> Choose CSV<input type="file" accept=".csv,text/csv" onChange={event => { const file = event.target.files?.[0]; if (file) void importManualCsv(file); event.currentTarget.value = ''; }} /></label></Card>
             {selectedManualIds.length > 0 && <Card className="bulk-toolbar"><strong>{selectedManualIds.length} selected</strong><Select value={bulkMarket} onChange={event => setBulkMarket(event.target.value)} aria-label="Bulk set market"><option value="">Set market…</option><option value="NSE">NSE</option><option value="BSE">BSE</option><option value="NYSE">NYSE</option></Select><Select value={bulkType} onChange={event => setBulkType(event.target.value)} aria-label="Bulk set type"><option value="">Set type…</option><option value="stock">Stock</option><option value="mf">Mutual fund</option><option value="etf">ETF</option><option value="bond">Bond</option><option value="other">Other</option></Select><Input aria-label="Bulk set source" list="manual-sources" placeholder="Set source (e.g. Groww)" value={bulkSource} onChange={event => setBulkSource(event.target.value)} /><Button variant="outline" onClick={() => void applyManualBulkEdit()} disabled={manualBusy}>Apply changes</Button><Button variant="outline" className="danger-button" onClick={() => void deleteSelectedManualRows()} disabled={manualBusy}><Trash2 size={14}/> Delete selected</Button></Card>}
             <section className="panel manual-grid-panel"><div className="panel-heading"><div><h2>Investment ledger</h2><p className="section-subtitle">Edit cells directly, then save changes. Price sync fills current prices for stock and ETF rows.</p></div><div className="manual-grid-toolbar"><label className="data-table-filter"><Search size={15} aria-hidden="true"/><Input type="search" aria-label="Filter manual positions" placeholder="Filter positions…" value={manualSearch} onChange={event => setManualSearch(event.target.value)}/></label><Button variant="outline" disabled={refreshing || manualDirty || !preferences?.yfinance_sync_enabled || !preferences?.yahoo_terms_confirmed} onClick={() => void syncMarketData()}><RefreshCw size={14}/>{refreshing ? 'Syncing…' : 'Sync Yahoo prices'}</Button></div></div>
+              {preferences && (!preferences.yfinance_sync_enabled || !preferences.yahoo_terms_confirmed) && <p className="data-table-count">Enable Yahoo price sync and confirm its terms in Settings to refresh prices. Save current edits first.</p>}
               <datalist id="manual-sources">{[...new Set(manualPositions.map(item => item.source).filter(Boolean))].map(source => <option key={source} value={source}/>)}</datalist>
               <Table className="manual-grid"><TableHeader><TableRow><TableHead><input aria-label="Select all filtered positions" type="checkbox" checked={filteredManualPositions.length > 0 && filteredManualPositions.every(row => selectedManualIds.includes(row.id))} onChange={event => setSelectedManualIds(ids => event.target.checked ? [...new Set([...ids, ...filteredManualPositions.map(row => row.id)])] : ids.filter(id => !filteredManualPositions.some(row => row.id === id)))}/></TableHead><TableHead scope="col">Ticker</TableHead><TableHead scope="col">Units</TableHead><TableHead scope="col">Market</TableHead><TableHead scope="col">Buy price</TableHead><TableHead scope="col">Current price</TableHead><TableHead scope="col">Source</TableHead><TableHead scope="col">Type</TableHead><TableHead scope="col">Market value</TableHead></TableRow></TableHeader><TableBody>
                 {filteredManualPositions.map(row => <TableRow key={row.id}><TableCell><input aria-label={`Select ${row.ticker || 'new row'}`} type="checkbox" checked={selectedManualIds.includes(row.id)} onChange={event => setSelectedManualIds(ids => event.target.checked ? [...ids, row.id] : ids.filter(id => id !== row.id))}/></TableCell>
@@ -1057,55 +1110,51 @@ function App() {
 
           {activeSection === 'Glossary' && <section><div className="welcome-row"><div><p className="overline">PLAIN LANGUAGE</p><h1>Portfolio <em>glossary.</em></h1><p className="welcome-copy">Short definitions for the numbers and terms in this dashboard.</p></div></div><label className="glossary-search"><Search size={17}/><Input aria-label="Search glossary" placeholder="Search terms" value={glossarySearch} onChange={e => setGlossarySearch(e.target.value)}/></label><div className="glossary-grid">{filteredGlossary.map(item => <article className="panel glossary-card" key={item.term}><h2>{item.term}</h2><p>{item.definition}</p></article>)}</div></section>}
 
-          {activeSection === 'AI insights' && <section><div className="welcome-row"><div><p className="overline">PRIVATE · LOCAL MODEL</p><h1>Understand your <em>portfolio.</em></h1><p className="welcome-copy">A sourced Markdown review of portfolio composition, available news, concentration, and data gaps.</p></div><Button variant="ai" onClick={() => void generateAIReview()} disabled={aiLoading || !preferences?.ollama_enabled}>{aiLoading ? 'Reviewing…' : 'Generate review'}</Button></div>
-            {!preferences?.ollama_enabled && <div className="panel"><h2>Enable local AI in Settings</h2><p>Choose a local Ollama endpoint and installed model, then enable AI portfolio review.</p><Button variant="outline" onClick={() => openSection('Settings')}>Open settings</Button></div>}
+          {activeSection === 'AI insights' && <section><div className="welcome-row"><div><p className="overline">LOCAL MODEL · OLLAMA</p><h1>Portfolio <em>analysis.</em></h1><p className="welcome-copy">A sourced Markdown review of portfolio composition, available news, concentration, and data gaps.</p></div><Button variant="ai" onClick={() => void generateAIReview()} disabled={aiLoading || !preferences?.ollama_enabled}>{aiLoading ? 'Reviewing…' : 'Generate review'}</Button></div>
+            {!preferences?.ollama_enabled && <Alert><AlertTitle>Local AI is turned off</AlertTitle><AlertDescription>Choose an Ollama endpoint and model, then enable AI portfolio reviews.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Configure Ollama</Button></Alert>}
             {aiReview && <article className="panel ai-summary"><div className="panel-heading"><div><h2>Portfolio analysis · {aiReview.model}</h2><p className="section-subtitle">Generated {formatDate(aiReview.generated_at)} · {aiReview.scope}</p></div><Button variant="outline" onClick={() => exportMarkdownReport(aiReview)}><Download size={14}/> Export Markdown</Button></div><Markdown source={aiReview.markdown} /></article>}
             <p className="ai-disclaimer">The equal-weight quantities are an illustrative rebalance scenario, not personalized targets or orders. Review price dates, goals, risk tolerance, liquidity, taxes, and fees before making decisions.</p>
             {renderReportArchive('portfolio')}
           </section>}
 
           {activeSection === 'News & reports' && <section className="news-page"><div className="welcome-row"><div><p className="overline">PORTFOLIO COVERAGE</p><h1>News & <em>reports.</em></h1><p className="welcome-copy">Cached per-holding Yahoo Finance headlines and market RSS stories matched to holdings. Refresh checks each source cache before fetching again.</p></div><div className="manual-actions"><Button variant="outline" disabled={newsLoading || !preferences || (!preferences.rss_news_enabled && !(preferences.yahoo_news_enabled && preferences.yahoo_terms_confirmed))} onClick={() => void syncPortfolioNews()}><RefreshCw size={15} className={newsLoading ? 'spin' : ''}/>{newsLoading ? 'Refreshing…' : 'Refresh headlines'}</Button><Button variant="ai" disabled={newsReportLoading || !preferences?.ollama_enabled || !newsItems.length} onClick={() => void generateAINewsReport()}><Bot size={15}/>{newsReportLoading ? 'Writing report…' : 'Write local AI report'}</Button></div></div>
-            {preferences && !preferences.rss_news_enabled && !preferences.yahoo_news_enabled && <div className="panel news-gate"><h2>Choose news sources in Settings</h2><p>Enable market RSS feeds or Yahoo portfolio headlines. Yahoo access also requires the saved permission confirmation.</p><Button variant="outline" onClick={() => openSection('Settings')}>Open settings</Button></div>}
-            {preferences?.yahoo_news_enabled && !preferences.yahoo_terms_confirmed && !preferences.rss_news_enabled && <div className="panel news-gate"><h2>Confirm Yahoo access in Settings</h2><p>Yahoo portfolio headline refresh requires its permission acknowledgement. Market RSS feeds can be enabled independently.</p><Button variant="outline" onClick={() => openSection('Settings')}>Open settings</Button></div>}
+            {preferences && !preferences.rss_news_enabled && !preferences.yahoo_news_enabled && <Alert><AlertTitle>No news sources enabled</AlertTitle><AlertDescription>Enable market RSS feeds or Yahoo portfolio headlines in Settings. Yahoo access also requires its permission confirmation.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Configure news</Button></Alert>}
+            {preferences?.yahoo_news_enabled && !preferences.yahoo_terms_confirmed && !preferences.rss_news_enabled && <Alert variant="warning"><AlertTitle>Yahoo access needs confirmation</AlertTitle><AlertDescription>Confirm Yahoo portfolio headline access in Settings, or enable market RSS feeds independently.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Review news settings</Button></Alert>}
             {newsReport && <section className="panel news-ai-report"><div className="panel-heading"><div><h2>AI news report</h2><p className="section-subtitle">Generated locally with {newsReport.model} · {formatDate(newsReport.generated_at)}</p></div><Button variant="outline" onClick={() => exportMarkdownReport(newsReport)}><Download size={14}/> Export Markdown</Button></div><Markdown source={newsReport.markdown} /><small>{newsReport.scope}</small></section>}
+            {!preferences?.ollama_enabled && <Alert><AlertTitle>Local AI reports are turned off</AlertTitle><AlertDescription>Enable Ollama in Settings to write a report from the saved headlines.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Configure Ollama</Button></Alert>}
             {renderReportArchive('news')}
-            <div className="news-list">{newsItems.length === 0 ? <div className="panel news-empty"><Newspaper size={23}/><h2>No saved headlines in this window</h2><p>Enable sources in Settings and refresh. Articles are de-duplicated and cached in SQLite by source URL.</p></div> : newsItems.map(article => <article className="panel news-card" key={article.id}><div className="news-card-meta"><span>{article.related_tickers?.join(', ') || article.ticker}</span><span>{article.publisher || 'News source'}</span><time>{formatDate(article.published_at)}</time></div><h2>{article.url ? <a href={article.url} target="_blank" rel="noreferrer">{article.title} <ExternalLink size={13}/></a> : article.title}</h2>{article.summary && <p>{article.summary}</p>}<small>{article.instrument_name} · {article.asset_type} · fetched {formatDate(article.fetched_at)}</small></article>)}</div>
+            <div className="news-list">{newsItems.length === 0 ? <Card className="news-empty"><Empty icon={<Newspaper size={23}/>} title={newsLoading ? 'Refreshing headlines' : 'No saved headlines in this window'} description={newsLoading ? 'Checking enabled sources for updates…' : 'Enable a news source in Settings, then refresh to load stories relevant to your holdings.'} action={!newsLoading && <Button variant="outline" onClick={() => openSection('Settings')}>Open news settings</Button>} /></Card> : newsItems.map(article => <article className="panel news-card" key={article.id}><div className="news-card-meta"><span>{article.related_tickers?.join(', ') || article.ticker}</span><span>{article.publisher || 'News source'}</span><time>{formatDate(article.published_at)}</time></div><h2>{article.url ? <a href={article.url} target="_blank" rel="noreferrer">{article.title} <ExternalLink size={13}/></a> : article.title}</h2>{article.summary && <p>{article.summary}</p>}<small>{article.instrument_name} · {article.asset_type} · fetched {formatDate(article.fetched_at)}</small></article>)}</div>
           </section>}
 
-          {activeSection === 'Activity' && <section><div className="welcome-row"><div><p className="overline">DATA FRESHNESS</p><h1>Recent <em>activity.</em></h1><p className="welcome-copy">Review connections, refresh attempts, and the age of your saved snapshots.</p></div><Button variant="outline" onClick={() => void syncPortfolio()} disabled={refreshing}><RefreshCw size={15}/> Sync Zerodha</Button></div><div className="panel activity-list">{sources.length === 0 ? <p>No source activity has been recorded yet.</p> : sources.map(source => <article className="activity-item" key={source.source}><Badge variant={statusBadgeVariant(source.state)} className="status-pill">{source.state.replace('_', ' ')}</Badge><div><h2>{source.source}</h2><p>{source.status_message || source.last_error || 'No status detail available.'}</p><small>Last success: {formatDate(source.last_successful_refresh)} · Last attempt: {formatDate(source.last_attempted_refresh)} · Data date: {formatDate(source.as_of)}</small></div></article>)}</div></section>}
+          {activeSection === 'Activity' && <section><div className="welcome-row"><div><p className="overline">DATA FRESHNESS</p><h1>Recent <em>activity.</em></h1><p className="welcome-copy">Review connections, refresh attempts, and the age of your saved snapshots.</p></div><Button variant="outline" onClick={() => void syncPortfolio()} disabled={refreshing}><ZerodhaMark/><RefreshCw size={15}/> Sync Zerodha</Button></div><div className="panel activity-list">{sources.length === 0 ? <p>No source activity has been recorded yet.</p> : sources.map(source => <article className="activity-item" key={source.source}><Badge variant={statusBadgeVariant(source.state)} className="status-pill">{source.state.replace('_', ' ')}</Badge><div><h2>{source.source}</h2><p>{source.status_message || source.last_error || 'No status detail available.'}</p><small>Last success: {formatDate(source.last_successful_refresh)} · Last attempt: {formatDate(source.last_attempted_refresh)} · Data date: {formatDate(source.as_of)}</small></div></article>)}</div></section>}
 
           {(activeSection === 'Overview' || activeSection === 'Holdings') && <>
           <section className="welcome-row">
-            <div><p className="overline">{today}</p><h1>Your portfolio, <em>in focus.</em></h1><p className="welcome-copy">A calm place to understand what you own and how it’s doing.</p></div>
+            <div><p className="overline">{today}</p><h1>Portfolio <em>overview.</em></h1><p className="welcome-copy">Holdings, prices, and source dates from Zerodha and your manual ledger.</p></div>
             <div className="welcome-actions">
               <Button variant="outline" onClick={() => openSection('Manual portfolio')}><Plus size={16} /> Add holdings</Button>
-              <Button onClick={() => void syncPortfolio()} disabled={refreshing}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /> Sync Zerodha</Button>
+              <Button onClick={() => void syncPortfolio()} disabled={refreshing}><ZerodhaMark/><RefreshCw size={16} className={refreshing ? 'spin' : ''} /> Sync Zerodha</Button>
             </div>
           </section>
 
-          {tokenStatus && !tokenStatus.configured && (
-            <section className="panel" aria-labelledby="setup-heading">
-              <div className="panel-heading"><div><h2 id="setup-heading">Setup required</h2><p className="section-subtitle">The app needs a local Zerodha access token before it can load holdings.</p></div></div>
-              <p>{tokenStatus.message}</p>
-              <p>Open the internal Streamlit setup UI with <code>make token-ui</code> and save a fresh token to the local secure secret store.</p>
-            </section>
-          )}
+          {apiHealth === 'unavailable' && <Alert variant="destructive"><AlertTitle>Local API is offline</AlertTitle><AlertDescription>Start the backend with <code>make api</code>, then refresh this page. Saved portfolio data is not deleted when the API is unavailable.</AlertDescription></Alert>}
+          {tokenStatus && !tokenStatus.configured && <Alert><AlertTitle>Connect Zerodha</AlertTitle><AlertDescription>{tokenStatus.message} Open the local login setup with <code>make token-ui</code> to save a fresh access token.</AlertDescription></Alert>}
 
           <section aria-labelledby="summary-heading">
             <div className="section-title-row"><div><h2 id="summary-heading">Portfolio overview</h2><p className="section-subtitle">Your investment snapshot at a glance</p></div><Button variant="ghost" onClick={() => void syncPortfolio()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} />{refreshing ? 'Syncing…' : 'Refresh'}</Button></div>
             <div className="metric-grid">
-              <Card className="metric-card" role="group" aria-label="Total portfolio value"><div className="metric-label">Total portfolio value <span className="metric-icon mint"><WalletCards size={17} /></span></div><div className="metric-value">{formatCurrency(summary?.total_value ?? null)}</div><div className="metric-foot">{summary?.as_of ? new Date(summary.as_of).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'INR'} <span className="foot-separator">·</span> {summary?.status === 'empty' ? 'Awaiting data' : 'Updated value'}</div></Card>
-              <Card className="metric-card" role="group" aria-label="Invested amount"><div className="metric-label">Invested amount <span className="metric-icon peach"><Landmark size={17} /></span></div><div className="metric-value">{formatCurrency(summary?.invested ?? null)}</div><div className="metric-foot">{summary?.invested != null ? 'Based on imported transactions' : 'No cost basis yet'}</div></Card>
-              <Card className="metric-card" role="group" aria-label="Overall returns"><div className="metric-label">Overall returns <span className="metric-icon blue"><ArrowUpRight size={17} /></span></div><div className="metric-value">{formatCurrency(summary?.pnl ?? null)}</div><div className="metric-foot">{summary?.pnl != null ? 'Portfolio P&L' : 'P&amp;L appears when cost data is available'}</div></Card>
+              <Card className="metric-card" role="group" aria-label="Total portfolio value"><div className="metric-label">Total portfolio value <span className="metric-icon mint"><WalletCards size={17} /></span></div><div className="metric-value">{initialPortfolioLoading ? <Skeleton className="metric-value-skeleton"/> : formatCurrency(summary?.total_value ?? null)}</div><div className="metric-foot">{summary?.as_of ? new Date(summary.as_of).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'INR'} <span className="foot-separator">·</span> {summary?.status === 'empty' ? 'Awaiting data' : 'Updated value'}</div></Card>
+              <Card className="metric-card" role="group" aria-label="Invested amount"><div className="metric-label">Invested amount <span className="metric-icon peach"><Landmark size={17} /></span></div><div className="metric-value">{initialPortfolioLoading ? <Skeleton className="metric-value-skeleton"/> : formatCurrency(summary?.invested ?? null)}</div><div className="metric-foot">{summary?.invested != null ? 'Based on imported transactions' : 'No cost basis yet'}</div></Card>
+              <Card className="metric-card" role="group" aria-label="Overall returns"><div className="metric-label">Overall returns <span className="metric-icon blue"><ArrowUpRight size={17} /></span></div><div className="metric-value">{initialPortfolioLoading ? <Skeleton className="metric-value-skeleton"/> : formatCurrency(summary?.pnl ?? null)}</div><div className="metric-foot">{summary?.pnl != null ? 'Portfolio P&L' : 'P&amp;L appears when cost data is available'}</div></Card>
             </div>
-            {summary?.warnings.length ? <div className="summary-warnings" role="status">{summary.warnings.map((warning, index) => <p key={`${index}-${warning}`}>{warning}</p>)}</div> : null}
+            {summary?.warnings.length ? <Alert variant="warning" className="summary-warnings"><AlertTitle>Data notes</AlertTitle><AlertDescription><ul>{summary.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul></AlertDescription></Alert> : null}
           </section>
 
           <div className="dashboard-grid">
             <section className="panel allocation-panel" aria-labelledby="allocation-title">
-              <div className="panel-heading"><div><h2 id="allocation-title">Asset allocation</h2><p className="section-subtitle">Where your portfolio is invested</p></div><button className="icon-button small" aria-label="Allocation information" onClick={() => setNotice('Allocation is calculated from the latest imported holdings.')}><CircleHelp size={16} /></button></div>
-              {allocations.length === 0 ? (
-                <div className="allocation-empty"><div className="donut" aria-hidden="true"><div className="donut-inner"><ChartNoAxesCombined size={23} /></div></div><strong>{holdings.length ? 'No priced INR holdings yet' : 'No holdings yet'}</strong><p>{holdings.length ? 'Allocation uses priced INR positions. Other currencies stay separate until conversion is configured.' : 'Sync Zerodha or add a position to get started.'}</p>{!holdings.length && <button className="text-button" onClick={() => openSection('Manual portfolio')}>Add manual holdings <ArrowUpRight size={14} /></button>}</div>
+              <div className="panel-heading"><div><h2 id="allocation-title">Asset allocation</h2><p className="section-subtitle">Where your portfolio is invested</p></div><Tooltip content="Allocation uses priced INR holdings from the latest saved snapshots. Holdings in other currencies are excluded until conversion is configured."><span className="allocation-help-icon"><CircleHelp size={16} aria-hidden="true" /></span></Tooltip></div>
+              {initialPortfolioLoading ? <div className="allocation-skeleton" role="status" aria-label="Loading portfolio allocation"><Skeleton/><Skeleton/><Skeleton/></div> : allocations.length === 0 ? (
+                <div className="allocation-empty"><div className="donut" aria-hidden="true"><div className="donut-inner"><ChartNoAxesCombined size={23} /></div></div><Empty title={holdings.length ? 'No priced INR holdings yet' : 'No holdings yet'} description={holdings.length ? 'Allocation uses priced INR positions. Other currencies stay separate until conversion is configured.' : 'Sync Zerodha or add a position to get started.'} action={!holdings.length && <Button variant="outline" onClick={() => openSection('Manual portfolio')}>Add manual holdings</Button>} /></div>
               ) : (
                 <div className="allocation-list">
                   {allocations.map((bucket) => (
@@ -1140,39 +1189,37 @@ function App() {
 
           <section className="panel holdings-panel" aria-labelledby="holdings-heading">
             <div className="panel-heading holdings-heading"><div><h2 id="holdings-heading">Your holdings</h2><p className="section-subtitle">{activeSection === 'Overview' ? 'A quick view of your portfolio' : 'Search, sort, and page through your holdings'}</p></div><Button variant="ghost" onClick={() => openSection('Holdings')}>View all <ArrowUpRight size={14} /></Button></div>
-            <DataTable data={displayHoldings} columns={holdingColumns} getRowId={row => row.id} searchValue={row => `${row.instrument_name} ${row.symbol ?? ''} ${row.asset_class} ${row.source}`} searchPlaceholder="Find a holding…" caption="Portfolio holdings" emptyState={holdings.length === 0 ? <div className="table-empty"><span className="empty-icon"><WalletCards size={19} /></span><span><strong>Your holdings will appear here</strong><small>Import a statement or connect an account to begin.</small></span><ArrowDownLeft className="empty-arrow" size={17} aria-hidden="true" /></div> : 'No holdings match this search.'}/>
+            {initialPortfolioLoading ? <div className="portfolio-table-loading" role="status" aria-label="Loading portfolio holdings">{Array.from({ length: 4 }, (_, index) => <Skeleton key={index} className="table-row-skeleton" />)}</div> : <DataTable data={displayHoldings} columns={holdingColumns} getRowId={row => row.id} searchValue={row => `${row.instrument_name} ${row.symbol ?? ''} ${row.asset_class} ${row.source}`} searchPlaceholder="Find a holding…" caption="Portfolio holdings" emptyState={holdings.length === 0 ? <Empty icon={<WalletCards size={20}/>} title="No holdings yet" description="Sync Zerodha or add a position to load your portfolio." action={<Button variant="outline" onClick={() => openSection('Manual portfolio')}>Add manual positions</Button>} /> : 'No holdings match this search.'}/>}
             <div className="table-note"><span>INR and USD follow each holding’s market currency</span><span>Data date: {formatDate(summary?.as_of ?? null)}</span></div>
           </section>
 
           <section className="panel holdings-panel" aria-labelledby="sips-heading">
-            <div className="panel-heading holdings-heading"><div><h2 id="sips-heading">Mutual fund SIPs</h2><p className="section-subtitle">Schedules returned by Zerodha Coin</p></div></div>
-            {sips.length === 0 ? (
-              <div className="table-empty"><span className="empty-icon"><RefreshCw size={17} /></span><span><strong>No active or paused SIPs returned</strong><small>Sync the Zerodha account to refresh SIP schedules.</small></span></div>
-            ) : <DataTable data={sips} columns={sipColumns} getRowId={row => row.id} searchValue={row => `${row.scheme_name} ${row.status ?? ''} ${row.source}`} searchPlaceholder="Find a Zerodha SIP…" caption="Zerodha mutual fund SIP schedules"/>}
+            <div className="panel-heading holdings-heading"><div><h2 id="sips-heading" className="heading-with-provider"><ZerodhaMark/>Mutual fund SIPs</h2><p className="section-subtitle">Read-only schedules returned by Zerodha Coin</p></div></div>
+            {initialPortfolioLoading ? <div className="portfolio-table-loading" role="status" aria-label="Loading Zerodha SIP schedules">{Array.from({ length: 2 }, (_, index) => <Skeleton key={index} className="table-row-skeleton" />)}</div> : sips.length === 0 ? <Empty icon={<RefreshCw size={18}/>} title="No Zerodha SIPs in the latest snapshot" description="Sync your Zerodha account to check for current mutual-fund SIP schedules." action={<Button variant="outline" onClick={() => void syncPortfolio()} disabled={refreshing}><RefreshCw size={14}/> Sync Zerodha</Button>} /> : <DataTable data={sips} columns={sipColumns} getRowId={row => row.id} searchValue={row => `${row.scheme_name} ${row.status ?? ''} ${row.source}`} searchPlaceholder="Find a Zerodha SIP…" caption="Zerodha mutual fund SIP schedules"/>}
           </section>
 
           <section className="panel holdings-panel manual-sips-panel" aria-labelledby="manual-sips-heading">
             <div className="panel-heading holdings-heading"><div><h2 id="manual-sips-heading">Manual SIP schedules</h2><p className="section-subtitle">Local reminders and planned entries for funds held outside Zerodha</p></div></div>
             <p className="manual-sip-disclaimer">Entries created automatically are marked scheduled/unconfirmed. They do not prove that a payment was made and never change a Zerodha SIP.</p>
             <form className="manual-sip-form" onSubmit={event => void createManualSip(event)}>
-              <label>Fund or scheme<Input required maxLength={160} value={sipSchemeName} onChange={event => setSipSchemeName(event.target.value)} placeholder="Fund name" /></label>
-              <label>Source<Input required maxLength={120} value={sipSource} onChange={event => setSipSource(event.target.value)} placeholder="Broker or app" /></label>
-              <label>Amount (₹)<Input required type="number" min="0.01" step="0.01" value={sipAmount} onChange={event => setSipAmount(event.target.value)} /></label>
-              <label>Frequency<Select value={sipFrequency} onChange={event => { const value = event.target.value as 'monthly' | 'weekly'; setSipFrequency(value); setSipTriggerDay(value === 'monthly' ? '1' : '0'); }}><option value="monthly">Monthly</option><option value="weekly">Weekly</option></Select></label>
-              <label>{sipFrequency === 'monthly' ? 'Trigger day' : 'Trigger weekday'}<Select value={sipTriggerDay} onChange={event => setSipTriggerDay(event.target.value)}>{sipFrequency === 'monthly' ? Array.from({ length: 31 }, (_, index) => index + 1).map(day => <option key={day} value={day}>{day}{day === 1 ? 'st' : day === 2 ? 'nd' : day === 3 ? 'rd' : 'th'} of month</option>) : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day, index) => <option key={day} value={index}>{day}</option>)}</Select></label>
-              <label>Start date<Input required type="date" value={sipStartDate} onChange={event => setSipStartDate(event.target.value)} /></label>
-              <label>End date (optional)<Input type="date" min={sipStartDate} value={sipEndDate} onChange={event => setSipEndDate(event.target.value)} /></label>
+              <Field label="Fund or scheme"><Input required maxLength={160} value={sipSchemeName} onChange={event => setSipSchemeName(event.target.value)} placeholder="Fund name" /></Field>
+              <Field label="Source"><Input required maxLength={120} value={sipSource} onChange={event => setSipSource(event.target.value)} placeholder="Broker or app" /></Field>
+              <Field label="Amount (₹)"><Input required type="number" min="0.01" step="0.01" value={sipAmount} onChange={event => setSipAmount(event.target.value)} /></Field>
+              <Field label="Frequency"><Select value={sipFrequency} onChange={event => { const value = event.target.value as 'monthly' | 'weekly'; setSipFrequency(value); setSipTriggerDay(value === 'monthly' ? '1' : '0'); }}><option value="monthly">Monthly</option><option value="weekly">Weekly</option></Select></Field>
+              <Field label={sipFrequency === 'monthly' ? 'Trigger day' : 'Trigger weekday'}><Select value={sipTriggerDay} onChange={event => setSipTriggerDay(event.target.value)}>{sipFrequency === 'monthly' ? Array.from({ length: 31 }, (_, index) => index + 1).map(day => <option key={day} value={day}>{day}{day === 1 ? 'st' : day === 2 ? 'nd' : day === 3 ? 'rd' : 'th'} of month</option>) : ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'].map((day, index) => <option key={day} value={index}>{day}</option>)}</Select></Field>
+              <Field label="Start date"><Input required type="date" value={sipStartDate} onChange={event => setSipStartDate(event.target.value)} /></Field>
+              <Field label="End date (optional)"><Input type="date" min={sipStartDate} value={sipEndDate} onChange={event => setSipEndDate(event.target.value)} /></Field>
               <div className="manual-sip-form-actions"><Button type="submit" disabled={manualSipBusy || !sipSchemeName.trim() || !sipSource.trim() || !sipAmount}> <Plus size={14} />{manualSipBusy ? 'Saving…' : sipEditingId ? 'Save changes' : 'Add schedule'}</Button>{sipEditingId && <Button type="button" variant="ghost" onClick={cancelManualSipEdit}>Cancel</Button>}</div>
             </form>
-            {manualSips.length === 0 ? <div className="table-empty"><span><strong>No manual SIP schedules</strong><small>Add a schedule above. The next app load will create one entry for the latest eligible trigger interval.</small></span></div> : <div className="manual-sip-list">{manualSips.map(schedule => <article className="manual-sip-card" key={schedule.id}>
+            {initialPortfolioLoading ? <div className="portfolio-table-loading" aria-label="Loading manual SIP schedules">{Array.from({ length: 2 }, (_, index) => <Skeleton key={index} className="schedule-skeleton" />)}</div> : manualSips.length === 0 ? <Empty title="No manual SIP schedules" description="Add a schedule above. The app records one eligible installment per trigger interval." /> : <div className="manual-sip-list">{manualSips.map(schedule => <article className="manual-sip-card" key={schedule.id}>
               <div className="manual-sip-card-head"><div><h3>{schedule.scheme_name}</h3><p>{schedule.source} · {formatCurrency(schedule.amount)} · {schedule.frequency === 'monthly' ? `day ${schedule.trigger_day} each month` : `every ${['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][schedule.trigger_day]}`} · {schedule.timezone}</p></div><div className="manual-sip-card-controls"><Button variant="ghost" onClick={() => editManualSip(schedule)}>Edit</Button><label className="manual-sip-toggle"><Switch checked={schedule.enabled} disabled={manualSipBusy} onChange={() => void toggleManualSip(schedule)} /><span>{schedule.enabled ? 'Enabled' : 'Paused'}</span></label></div></div>
               <div className="manual-sip-dates">Next trigger {formatDate(schedule.next_trigger_date)} · Starts {formatDate(schedule.start_date)}{schedule.end_date ? ` · Ends ${formatDate(schedule.end_date)}` : ' · No end date'}</div>
-              {schedule.entries.length === 0 ? <p className="manual-sip-no-entries">No eligible trigger interval has been recorded yet.</p> : <DataTable data={schedule.entries} getRowId={entry => entry.id} searchValue={entry => `${entry.effective_date} ${entry.interval_key} ${entry.status}`} searchPlaceholder="Filter installments…" caption={`${schedule.scheme_name} manual SIP entries`} columns={[
+              {schedule.entries.length === 0 ? <p className="manual-sip-no-entries">No eligible trigger interval has been recorded yet.</p> : <Collapsible title={`Installment history · ${schedule.entries.length} ${schedule.entries.length === 1 ? 'entry' : 'entries'}`}><DataTable data={schedule.entries} getRowId={entry => entry.id} searchValue={entry => `${entry.effective_date} ${entry.interval_key} ${entry.status}`} searchPlaceholder="Filter installments…" caption={`${schedule.scheme_name} manual SIP entries`} columns={[
                 { id: 'date', header: 'Trigger interval', sortValue: entry => entry.effective_date, cell: entry => <span className="table-detail-cell">{formatDate(entry.effective_date)}<small>{entry.interval_key}</small></span> },
                 { id: 'amount', header: 'Amount', sortValue: entry => entry.amount, cell: entry => formatCurrency(entry.amount) },
                 { id: 'status', header: 'Status', sortValue: entry => entry.status, cell: entry => <Badge variant={entry.status === 'confirmed' ? 'success' : entry.status === 'skipped' ? 'secondary' : 'outline'}>{entry.status}</Badge> },
                 { id: 'action', header: 'Update', cell: entry => entry.status === 'scheduled/unconfirmed' ? <div className="manual-sip-entry-actions"><Button variant="outline" onClick={() => void updateManualSipEntry(entry, 'confirmed')}>Confirm paid</Button><Button variant="ghost" onClick={() => void updateManualSipEntry(entry, 'skipped')}>Skip</Button></div> : <Button variant="ghost" onClick={() => void updateManualSipEntry(entry, 'scheduled/unconfirmed')}>Reopen</Button> },
-              ]}/>}
+              ]}/></Collapsible>}
             </article>)}</div>}
           </section>
 
@@ -1191,12 +1238,13 @@ function App() {
               </div>
             </section>
           )}
-          {activeSection === 'Holdings' && <section className="panel price-sync-panel"><div><h2>Daily market price update</h2><p className="section-subtitle">Yahoo Finance data via yfinance · refreshes Zerodha equity symbols only.</p></div><Button variant="outline" disabled={refreshing || !preferences?.yfinance_sync_enabled || !preferences?.yahoo_terms_confirmed} onClick={() => void syncMarketData()}><RefreshCw size={15}/>{refreshing ? 'Refreshing…' : 'Sync prices'}</Button></section>}
+          {activeSection === 'Holdings' && <section className="panel price-sync-panel"><div><h2>Market prices</h2><p className="section-subtitle">Yahoo Finance data via yfinance · refreshes supported equity symbols and manual stock/ETF positions.</p>{preferences && (!preferences.yfinance_sync_enabled || !preferences.yahoo_terms_confirmed) && <p className="section-subtitle">Enable Yahoo price sync and confirm its terms in Settings to use this action.</p>}</div><Button variant="outline" disabled={refreshing || !preferences?.yfinance_sync_enabled || !preferences?.yahoo_terms_confirmed} onClick={() => void syncMarketData()}><RefreshCw size={15}/>{refreshing ? 'Refreshing…' : 'Sync prices'}</Button></section>}
           </>}
 
-          <footer className="page-footer"><span>Made for clarity, built for privacy.</span><span><ShieldCheck size={14} /> Your data never leaves this device</span></footer>
+          <footer className="page-footer"><span>Local portfolio dashboard · No hosted account</span><span><ShieldCheck size={14} /> Records stored in SQLite; enabled providers receive their own requests.</span></footer>
         </div>
       </main>
+      <AlertDialog open={confirmation !== null} title={confirmation?.title ?? ''} description={confirmation?.description ?? ''} confirmLabel={confirmation?.confirmLabel ?? 'Confirm'} destructive={confirmation?.destructive} onOpenChange={open => { if (!open) resolveConfirmation(false); }} onConfirm={() => resolveConfirmation(true)} />
       <ToastViewport items={toasts} onDismiss={dismissToast} />
     </div>
   );

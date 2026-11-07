@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { createRoot } from 'react-dom/client';
 import {
   Activity, ArrowDownLeft, ArrowUpRight, Bot, BriefcaseBusiness, ChartNoAxesCombined,
-  ChevronDown, CircleHelp, FileUp, Landmark, LayoutDashboard, Menu, Plus, RefreshCw,
+  ChevronDown, CircleHelp, FileUp, Landmark, LayoutDashboard, Menu, RefreshCw,
   Settings2, ShieldCheck, WalletCards,
 } from 'lucide-react';
 import { Button } from './components/ui/button';
@@ -30,6 +31,50 @@ type TokenStatus = {
   api_key: boolean;
 };
 
+type HoldingRow = {
+  id: string;
+  instrument_name: string;
+  asset_class: string;
+  symbol: string | null;
+  quantity: number | null;
+  average_cost: number | null;
+  last_price: number | null;
+  value: number | null;
+  pnl: number | null;
+  price_as_of: string | null;
+  currency: string;
+  source: string;
+  as_of: string | null;
+};
+
+type AllocationBucket = {
+  asset_class: string;
+  value: number;
+  percentage: number;
+};
+
+type SipRow = {
+  id: string;
+  scheme_name: string;
+  amount: number | null;
+  frequency: string | null;
+  next_date: string | null;
+  status: string | null;
+  source: string;
+  as_of: string | null;
+};
+
+type SourceStatusItem = {
+  source: string;
+  source_type: string;
+  state: string;
+  status_message: string | null;
+  last_successful_refresh: string | null;
+  last_attempted_refresh: string | null;
+  last_error: string | null;
+  as_of: string | null;
+};
+
 const navigation: { label: Section; icon: typeof LayoutDashboard }[] = [
   { label: 'Overview', icon: LayoutDashboard },
   { label: 'Holdings', icon: BriefcaseBusiness },
@@ -43,6 +88,10 @@ function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [notice, setNotice] = useState('');
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
+  const [holdings, setHoldings] = useState<HoldingRow[]>([]);
+  const [sips, setSips] = useState<SipRow[]>([]);
+  const [allocations, setAllocations] = useState<AllocationBucket[]>([]);
+  const [sources, setSources] = useState<SourceStatusItem[]>([]);
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
   const today = new Intl.DateTimeFormat('en-IN', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
@@ -57,6 +106,18 @@ function App() {
     }).format(value);
   };
 
+  const formatCompact = (value: number | null) => {
+    if (value == null) return '—';
+    return `${value.toFixed(2)}`;
+  };
+
+  const formatDate = (value: string | null) => {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+
   async function loadSummary() {
     try {
       const response = await fetch('/api/portfolio/summary');
@@ -65,6 +126,46 @@ function App() {
       setSummary(payload);
     } catch {
       setSummary(null);
+    }
+  }
+
+  async function loadPortfolioData() {
+    try {
+      const [holdingsResponse, allocationsResponse, sourcesResponse, sipsResponse] = await Promise.all([
+        fetch('/api/portfolio/holdings'),
+        fetch('/api/portfolio/allocations'),
+        fetch('/api/sources'),
+        fetch('/api/portfolio/sips'),
+      ]);
+      if (holdingsResponse.ok) {
+        const payload = (await holdingsResponse.json()) as { items?: HoldingRow[] };
+        setHoldings(payload.items ?? []);
+      } else {
+        setHoldings([]);
+      }
+      if (allocationsResponse.ok) {
+        const payload = (await allocationsResponse.json()) as AllocationBucket[];
+        setAllocations(payload);
+      } else {
+        setAllocations([]);
+      }
+      if (sourcesResponse.ok) {
+        const payload = (await sourcesResponse.json()) as { items?: SourceStatusItem[] };
+        setSources(payload.items ?? []);
+      } else {
+        setSources([]);
+      }
+      if (sipsResponse.ok) {
+        const payload = (await sipsResponse.json()) as { items?: SipRow[] };
+        setSips(payload.items ?? []);
+      } else {
+        setSips([]);
+      }
+    } catch {
+      setHoldings([]);
+      setAllocations([]);
+      setSources([]);
+      setSips([]);
     }
   }
 
@@ -82,27 +183,92 @@ function App() {
     }
   }
 
-  async function checkApi() {
+  async function syncPortfolio() {
     setRefreshing(true);
+    let apiResponded = false;
     try {
       const response = await fetch('/api/health');
       if (!response.ok) throw new Error('API unavailable');
+      apiResponded = true;
       setApiHealth('connected');
-      setNotice('Local API is responding. Connect a read-only Zerodha Personal source to load your portfolio.');
-      await loadSummary();
       const nextTokenStatus = await loadTokenStatus();
+      await Promise.all([loadSummary(), loadPortfolioData()]);
       if (!nextTokenStatus.configured) {
         setNotice(nextTokenStatus.message);
+        return;
       }
-    } catch {
-      setApiHealth('unavailable');
-      setNotice('The local API could not be reached. Start the app with Docker Compose and try again.');
+
+      setNotice('Syncing your read-only portfolio snapshot from Zerodha…');
+      const syncResponse = await fetch('/api/portfolio/sync', { method: 'POST' });
+      const syncPayload = await syncResponse.json();
+      if (!syncResponse.ok) {
+        throw new Error(syncPayload.detail || 'Zerodha portfolio sync failed.');
+      }
+
+      await Promise.all([loadSummary(), loadPortfolioData()]);
+      setNotice(
+        `Updated from Zerodha: ${syncPayload.holdings_synced} holdings and ${syncPayload.sips_synced} SIPs.`,
+      );
+    } catch (error) {
+      if (!apiResponded) setApiHealth('unavailable');
+      else await Promise.all([loadSummary(), loadPortfolioData()]);
+      setNotice(error instanceof Error
+        ? error.message
+        : 'The local API or Zerodha could not be reached.');
     } finally {
       setRefreshing(false);
     }
   }
 
-  useEffect(() => { void checkApi(); }, []);
+  async function loadSamplePortfolio() {
+    const payload = {
+      source_type: 'manual-import',
+      rows: [
+        {
+          id: 'sample-1',
+          instrument_name: 'Reliance Industries',
+          asset_class: 'equity',
+          symbol: 'RELIANCE',
+          quantity: 10,
+          average_cost: 2500,
+          last_price: 2900,
+          value: 29000,
+          pnl: 4000,
+          currency: 'INR',
+          as_of: new Date().toISOString(),
+        },
+        {
+          id: 'sample-2',
+          instrument_name: 'HDFC Bank',
+          asset_class: 'equity',
+          symbol: 'HDFCBANK',
+          quantity: 12,
+          average_cost: 1600,
+          last_price: 1700,
+          value: 20400,
+          pnl: 1200,
+          currency: 'INR',
+          as_of: new Date().toISOString(),
+        },
+      ],
+    };
+
+    setNotice('Loading a local sample portfolio so the dashboard has visible data while the live broker sync is implemented.');
+    try {
+      const response = await fetch('/api/import/commit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error('Failed to import sample data');
+      await Promise.all([loadSummary(), loadPortfolioData()]);
+      setNotice('Sample portfolio loaded. You can now view holdings, allocation, and source data.');
+    } catch {
+      setNotice('The local import endpoint could not load the sample portfolio. Check the API server and try again.');
+    }
+  }
+
+  useEffect(() => { void syncPortfolio(); }, []);
 
   const openSection = (section: Section) => {
     setActiveSection(section);
@@ -145,7 +311,10 @@ function App() {
         <div className="content-wrap">
           <section className="welcome-row">
             <div><p className="overline">{today}</p><h1>Your portfolio, <em>in focus.</em></h1><p className="welcome-copy">A calm place to understand what you own and how it’s doing.</p></div>
-            <div className="welcome-actions"><Button variant="outline" onClick={() => setNotice('The CSV import flow is the next build step. No account data is read or stored yet.')}><FileUp size={16} /> Import data</Button><Button onClick={() => setNotice('Broker connection is not configured. This scaffold does not request or store broker credentials.')}><Plus size={17} /> Connect account</Button></div>
+            <div className="welcome-actions">
+              <Button variant="outline" onClick={loadSamplePortfolio}><FileUp size={16} /> Load sample</Button>
+              <Button onClick={() => void syncPortfolio()} disabled={refreshing}><RefreshCw size={16} className={refreshing ? 'spin' : ''} /> Sync Zerodha</Button>
+            </div>
           </section>
 
           {notice && <div className="notice" role="status"><span>{notice}</span><button className="notice-close" aria-label="Dismiss message" onClick={() => setNotice('')}>×</button></div>}
@@ -159,7 +328,7 @@ function App() {
           )}
 
           <section aria-labelledby="summary-heading">
-            <div className="section-title-row"><div><h2 id="summary-heading">Portfolio overview</h2><p className="section-subtitle">Your investment snapshot at a glance</p></div><Button variant="ghost" onClick={() => void checkApi()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} />{refreshing ? 'Checking…' : 'Refresh'}</Button></div>
+            <div className="section-title-row"><div><h2 id="summary-heading">Portfolio overview</h2><p className="section-subtitle">Your investment snapshot at a glance</p></div><Button variant="ghost" onClick={() => void syncPortfolio()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} />{refreshing ? 'Syncing…' : 'Refresh'}</Button></div>
             <div className="metric-grid">
               <Card className="metric-card" role="group" aria-label="Total portfolio value"><div className="metric-label">Total portfolio value <span className="metric-icon mint"><WalletCards size={17} /></span></div><div className="metric-value">{formatCurrency(summary?.total_value ?? null)}</div><div className="metric-foot">{summary?.as_of ? new Date(summary.as_of).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : 'INR'} <span className="foot-separator">·</span> {summary?.status === 'empty' ? 'Awaiting data' : 'Updated value'}</div></Card>
               <Card className="metric-card" role="group" aria-label="Invested amount"><div className="metric-label">Invested amount <span className="metric-icon peach"><Landmark size={17} /></span></div><div className="metric-value">{formatCurrency(summary?.invested ?? null)}</div><div className="metric-foot">{summary?.invested != null ? 'Based on imported transactions' : 'No cost basis yet'}</div></Card>
@@ -170,7 +339,24 @@ function App() {
           <div className="dashboard-grid">
             <section className="panel allocation-panel" aria-labelledby="allocation-title">
               <div className="panel-heading"><div><h2 id="allocation-title">Asset allocation</h2><p className="section-subtitle">Where your portfolio is invested</p></div><button className="icon-button small" aria-label="Allocation information" onClick={() => setNotice('Allocation is calculated from the latest imported holdings.')}><CircleHelp size={16} /></button></div>
-              <div className="allocation-empty"><div className="donut" aria-hidden="true"><div className="donut-inner"><ChartNoAxesCombined size={23} /></div></div><strong>No holdings yet</strong><p>Import a statement to see your allocation.</p><button className="text-button" onClick={() => setNotice('The CSV import flow is the next build step. No account data is read or stored yet.')}>Add your first data <ArrowUpRight size={14} /></button></div>
+              {allocations.length === 0 ? (
+                <div className="allocation-empty"><div className="donut" aria-hidden="true"><div className="donut-inner"><ChartNoAxesCombined size={23} /></div></div><strong>No holdings yet</strong><p>Import a statement or load the sample portfolio.</p><button className="text-button" onClick={loadSamplePortfolio}>Load sample data <ArrowUpRight size={14} /></button></div>
+              ) : (
+                <div className="allocation-list">
+                  {allocations.map((bucket) => (
+                    <div key={bucket.asset_class} className="allocation-row">
+                      <div className="allocation-label">
+                        <span className={`legend-dot ${bucket.asset_class === 'equity' ? 'equity' : bucket.asset_class === 'mutual_fund' ? 'funds' : 'other'}`} />
+                        <strong>{bucket.asset_class === 'mutual_fund' ? 'Mutual funds' : bucket.asset_class}</strong>
+                      </div>
+                      <div className="allocation-meta">
+                        <span>{formatCurrency(bucket.value)}</span>
+                        <small>{bucket.percentage.toFixed(1)}%</small>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
               <div className="legend-row"><span><i className="legend-dot equity" />Equity</span><span><i className="legend-dot funds" />Mutual funds</span><span><i className="legend-dot other" />Other</span></div>
             </section>
             <section className="panel insight-panel" aria-labelledby="insight-heading">
@@ -185,9 +371,64 @@ function App() {
 
           <section className="panel holdings-panel" aria-labelledby="holdings-heading">
             <div className="panel-heading holdings-heading"><div><h2 id="holdings-heading">Your holdings</h2><p className="section-subtitle">A clear view of each investment</p></div><Button variant="ghost" onClick={() => openSection('Holdings')}>View all <ArrowUpRight size={14} /></Button></div>
-            <div className="table-scroll"><table><thead><tr><th scope="col">INSTRUMENT</th><th scope="col">TYPE</th><th scope="col">QUANTITY</th><th scope="col">PRICE</th><th scope="col">VALUE</th><th scope="col">RETURNS</th></tr></thead><tbody><tr><td colSpan={6}><div className="table-empty"><span className="empty-icon"><WalletCards size={19} /></span><span><strong>Your holdings will appear here</strong><small>Import a statement or connect an account to begin.</small></span><ArrowDownLeft className="empty-arrow" size={17} aria-hidden="true" /></div></td></tr></tbody></table></div>
-            <div className="table-note"><span>Values are shown in INR</span><span>Data date: —</span></div>
+            <div className="table-scroll">
+              <table>
+                <thead>
+                  <tr><th scope="col">INSTRUMENT</th><th scope="col">TYPE</th><th scope="col">QUANTITY</th><th scope="col">PRICE</th><th scope="col">VALUE</th><th scope="col">RETURNS</th></tr>
+                </thead>
+                <tbody>
+                  {holdings.length === 0 ? (
+                    <tr><td colSpan={6}><div className="table-empty"><span className="empty-icon"><WalletCards size={19} /></span><span><strong>Your holdings will appear here</strong><small>Import a statement or connect an account to begin.</small></span><ArrowDownLeft className="empty-arrow" size={17} aria-hidden="true" /></div></td></tr>
+                  ) : holdings.map((holding) => (
+                    <tr key={holding.id}>
+                      <td>{holding.instrument_name}</td>
+                      <td>{holding.asset_class === 'mutual_fund' ? 'Mutual fund' : holding.asset_class === 'equity_position' ? 'Equity position' : holding.asset_class === 'derivative_position' ? 'Derivative' : holding.asset_class}</td>
+                      <td>{formatCompact(holding.quantity)}</td>
+                      <td title={`Price date: ${formatDate(holding.price_as_of)}`}>
+                        {formatCurrency(holding.last_price)}
+                        <small className="table-price-date">{formatDate(holding.price_as_of)}</small>
+                      </td>
+                      <td>{formatCurrency(holding.value)}</td>
+                      <td>{formatCurrency(holding.pnl)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="table-note"><span>Values are shown in INR</span><span>Data date: {formatDate(summary?.as_of ?? null)}</span></div>
           </section>
+
+          <section className="panel holdings-panel" aria-labelledby="sips-heading">
+            <div className="panel-heading holdings-heading"><div><h2 id="sips-heading">Mutual fund SIPs</h2><p className="section-subtitle">Schedules returned by Zerodha Coin</p></div></div>
+            {sips.length === 0 ? (
+              <div className="table-empty"><span className="empty-icon"><RefreshCw size={17} /></span><span><strong>No active or paused SIPs returned</strong><small>Sync the Zerodha account to refresh SIP schedules.</small></span></div>
+            ) : (
+              <div className="table-scroll">
+                <table>
+                  <thead><tr><th scope="col">FUND</th><th scope="col">AMOUNT</th><th scope="col">FREQUENCY</th><th scope="col">NEXT INSTALMENT</th><th scope="col">STATUS</th></tr></thead>
+                  <tbody>{sips.map((sip) => (
+                    <tr key={sip.id}><td>{sip.scheme_name}</td><td>{formatCurrency(sip.amount)}</td><td>{sip.frequency ?? '—'}</td><td>{formatDate(sip.next_date)}</td><td>{sip.status ?? '—'}</td></tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          {sources.length > 0 && (
+            <section className="panel holdings-panel" aria-labelledby="source-heading">
+              <div className="panel-heading holdings-heading"><div><h2 id="source-heading">Source status</h2><p className="section-subtitle">Where each value is coming from</p></div></div>
+              <div className="source-list">
+                {sources.map((source) => (
+                  <div key={source.source} className="source-item">
+                    <span className={`status-pill ${source.state}`}>{source.state}</span>
+                    <strong>{source.source}</strong>
+                    <small>{source.status_message ?? 'No status detail available'}</small>
+                    <em>{formatDate(source.as_of)} · {source.source_type}</em>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
 
           <footer className="page-footer"><span>Made for clarity, built for privacy.</span><span><ShieldCheck size={14} /> Your data never leaves this device</span></footer>
         </div>
@@ -197,3 +438,10 @@ function App() {
 }
 
 export default App;
+
+const rootElement = document.getElementById('root');
+if (!rootElement) {
+  throw new Error('Could not find the React root element.');
+}
+
+createRoot(rootElement).render(<App />);

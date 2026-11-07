@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, Navigate, RouterProvider, useBlocker, useLocation, useNavigate } from 'react-router';
 import {
@@ -14,6 +14,7 @@ import { Markdown } from './components/ui/markdown';
 import { Progress } from './components/ui/progress';
 import { Select } from './components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
+import { ToastViewport, type ToastItem } from './components/ui/toast';
 import './style.css';
 import './theme.css';
 
@@ -227,7 +228,8 @@ function App() {
   const [apiHealth, setApiHealth] = useState<Health>('checking');
   const activeSection = sectionFromPath(location.pathname);
   const [refreshing, setRefreshing] = useState(false);
-  const [notice, setNotice] = useState('');
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const toastSequence = useRef(0);
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
   const [holdings, setHoldings] = useState<HoldingRow[]>([]);
   const [sips, setSips] = useState<SipRow[]>([]);
@@ -269,6 +271,22 @@ function App() {
   const filteredGlossary = glossaryTerms.filter((item) =>
     `${item.term} ${item.definition}`.toLowerCase().includes(glossarySearch.toLowerCase()),
   );
+
+  function addToast(message: string, variant: ToastItem['variant'] = 'default', progressLabel?: string) {
+    const id = ++toastSequence.current;
+    setToasts(items => [...items, { id, message, variant, progressLabel }]);
+    return id;
+  }
+
+  function setNotice(message: string) {
+    if (!message) return;
+    const isError = /failed|could not|unavailable|error|invalid|missing|unable/i.test(message);
+    addToast(message, isError ? 'destructive' : 'default');
+  }
+
+  function dismissToast(id: number) {
+    setToasts(items => items.filter(item => item.id !== id));
+  }
   const sourceSplit = holdings.reduce<Record<string, { value: number; count: number; unpriced: number; currency: string }>>((groups, holding) => {
     const currency = holding.currency || 'INR';
     const key = `${holding.source || 'Unknown'}|${currency}`;
@@ -658,6 +676,7 @@ function App() {
   }
 
   async function generateAIReview() {
+    const progressToast = addToast('Generating a local portfolio review…', 'progress', 'Generating a local portfolio review');
     setAiLoading(true);
     try {
       const response = await fetch('/api/ai/recommendations', { method: 'POST' });
@@ -670,6 +689,7 @@ function App() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Local portfolio review failed.');
     } finally {
+      dismissToast(progressToast);
       setAiLoading(false);
     }
   }
@@ -727,6 +747,7 @@ function App() {
   }
 
   async function generateAINewsReport() {
+    const progressToast = addToast('Writing a local AI news report…', 'progress', 'Writing a local AI news report');
     setNewsReportLoading(true);
     try {
       const response = await fetch('/api/ai/news-report', { method: 'POST' });
@@ -738,6 +759,7 @@ function App() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'News report generation failed.');
     } finally {
+      dismissToast(progressToast);
       setNewsReportLoading(false);
     }
   }
@@ -765,7 +787,6 @@ function App() {
   const openSection = (section: Section) => {
     if (activeSection === section) return;
     navigate(sectionPaths[section]);
-    setNotice('');
   };
 
   function renderReportArchive(type: ReportType) {
@@ -813,7 +834,6 @@ function App() {
         </header>
 
         <div className="content-wrap">
-          {notice && <div className="notice" role="status"><span>{notice}</span><button className="notice-close" aria-label="Dismiss message" onClick={() => setNotice('')}>×</button></div>}
           {activeSection === 'Manual portfolio' && <section className="manual-editor-page">
             <div className="welcome-row"><div><p className="overline">SEPARATE FROM ZERODHA</p><h1>Manual <em>portfolio.</em></h1><p className="welcome-copy">Track investments held on other apps. These rows live in a dedicated SQLite table and are included in portfolio analysis when manual imports are visible.</p>{manualDirty && <p className="unsaved-indicator">Unsaved grid edits</p>}</div><div className="manual-actions"><Button variant="outline" disabled={manualBusy || manualDirty} onClick={() => { window.location.href = '/api/manual-portfolio/export'; }}><Download size={15}/> Export CSV</Button><Button variant="outline" onClick={addManualPosition}><Plus size={15}/> Add row</Button><Button onClick={() => void saveManualPortfolio()} disabled={manualBusy || invalidManualRow}><Check size={15}/>{manualBusy ? 'Saving…' : 'Save edits'}</Button></div></div>
             <Card className="manual-import-card"><div className="manual-import-info"><strong>Import a CSV</strong><small>Required columns: ticker, units, market, buy_price, source, asset_type. current_price is optional.</small></div><Select value={csvMode} onChange={event => setCsvMode(event.target.value as 'append' | 'replace')} aria-label="CSV import mode"><option value="append">Append rows</option><option value="replace">Replace manual ledger</option></Select><label className="button button-outline csv-file-button"><Upload size={15}/> Choose CSV<input type="file" accept=".csv,text/csv" onChange={event => { const file = event.target.files?.[0]; if (file) void importManualCsv(file); event.currentTarget.value = ''; }} /></label></Card>
@@ -1011,6 +1031,7 @@ function App() {
           <footer className="page-footer"><span>Made for clarity, built for privacy.</span><span><ShieldCheck size={14} /> Your data never leaves this device</span></footer>
         </div>
       </main>
+      <ToastViewport items={toasts} onDismiss={dismissToast} />
     </div>
   );
 }

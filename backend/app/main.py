@@ -1,5 +1,6 @@
 import csv
 import io
+from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -15,6 +16,7 @@ from kiteconnect.exceptions import (
 
 from .kite_adapter import SOURCE_NAME, SOURCE_TYPE, sync_portfolio
 from .models import (
+    Holding,
     ImportPreviewRequest,
     ManualPositionBulkEdit,
     ManualPositionIds,
@@ -58,6 +60,96 @@ from .storage import (
 )
 from .yahoo_news_adapter import NEWS_SOURCE_TYPE, sync_portfolio_news
 from .yfinance_adapter import sync_daily_prices
+
+
+def _finalize_ai_report(
+    report: dict[str, object],
+    report_type: str,
+    preferences: Preferences,
+    holdings: list[Holding],
+    articles: list[dict[str, object]],
+) -> dict[str, object]:
+    captured_at = datetime.now(UTC).isoformat()
+    source_counts = dict(sorted(Counter(
+        str(holding.source or "Unknown") for holding in holdings
+    ).items()))
+    price_source_counts = dict(sorted(Counter(
+        str(holding.price_source or "Not recorded") for holding in holdings
+    ).items()))
+    news_source_counts = dict(sorted(Counter(
+        str(article.get("publisher") or article.get("source_key") or "Unknown")
+        for article in articles
+    ).items()))
+    portfolio_dates = [holding.as_of for holding in holdings if holding.as_of]
+    latest_portfolio_date = max(
+        portfolio_dates,
+        key=lambda value: value.replace(tzinfo=UTC)
+        if value.tzinfo is None else value.astimezone(UTC),
+        default=None,
+    )
+    metadata: dict[str, object] = {
+        "report_type": report_type,
+        "model": report.get("model"),
+        "local_endpoint": preferences.ollama_endpoint,
+        "model_completed_at_utc": report.get("generated_at"),
+        "captured_at_utc": captured_at,
+        "portfolio_row_count": len(holdings),
+        "portfolio_sources": source_counts,
+        "price_sources": price_source_counts,
+        "portfolio_as_of_utc": (
+            latest_portfolio_date.replace(tzinfo=UTC).isoformat()
+            if latest_portfolio_date and latest_portfolio_date.tzinfo is None
+            else latest_portfolio_date.astimezone(UTC).isoformat()
+            if latest_portfolio_date else None
+        ),
+        "news_article_count": len(articles),
+        "news_ticker_mentions": sum(
+            len(article.get("related_tickers") or []) for article in articles
+        ),
+        "news_sources": news_source_counts,
+        "news_lookback_hours": preferences.news_lookback_hours,
+        "news_article_limit": preferences.news_max_articles,
+    }
+    report["markdown"] = f"{report['markdown'].rstrip()}\n\n{_run_metadata_markdown(metadata)}"
+    saved = save_ai_report(
+        report_type,
+        str(report["model"]),
+        str(report["markdown"]),
+        report.get("generated_at") if isinstance(report.get("generated_at"), str) else None,
+        str(report["scope"]),
+        metadata,
+    )
+    return {**report, **saved}
+
+
+def _run_metadata_markdown(metadata: dict[str, object]) -> str:
+    labels = {
+        "report_type": "Report type",
+        "model": "Model",
+        "local_endpoint": "Local endpoint",
+        "model_completed_at_utc": "Model completion (UTC)",
+        "captured_at_utc": "Run captured (UTC)",
+        "portfolio_row_count": "Portfolio rows",
+        "portfolio_sources": "Portfolio sources",
+        "price_sources": "Price sources",
+        "portfolio_as_of_utc": "Portfolio snapshot as of (UTC)",
+        "news_article_count": "News articles included",
+        "news_ticker_mentions": "Matched ticker mentions",
+        "news_sources": "News sources",
+        "news_lookback_hours": "News lookback (hours)",
+        "news_article_limit": "Configured article limit",
+    }
+    rows = ["## Run metadata", "", "| Field | Value |", "| --- | --- |"]
+    for key, label in labels.items():
+        value = metadata.get(key)
+        if isinstance(value, dict):
+            rendered = ", ".join(f"{name} ({count})" for name, count in value.items())
+            rendered = rendered or "None recorded"
+        else:
+            rendered = str(value) if value not in (None, "") else "Not available"
+        rendered = rendered.replace("|", "\\|").replace("\n", " ")
+        rows.append(f"| {label} | {rendered} |")
+    return "\n".join(rows)
 
 
 @asynccontextmanager
@@ -207,22 +299,18 @@ def portfolio_recommendations() -> dict[str, object]:
             detail="Enable local AI insights in Settings before generating a review.",
         )
     holdings = get_holdings(include_manual=preferences.show_manual_imports)
+    articles = get_news_articles(
+        preferences.news_lookback_hours,
+        preferences.news_max_articles,
+    )
     try:
         report = generate_portfolio_insights(
             preferences.ollama_endpoint,
             preferences.ollama_model,
             holdings,
-            get_news_articles(
-                preferences.news_lookback_hours,
-                preferences.news_max_articles,
-            ),
+            articles,
         )
-        saved = save_ai_report(
-            "portfolio", str(report["model"]), str(report["markdown"]),
-            report.get("generated_at") if isinstance(report.get("generated_at"), str) else None,
-            str(report["scope"]),
-        )
-        return {**report, **saved}
+        return _finalize_ai_report(report, "portfolio", preferences, holdings, articles)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OllamaUnavailable as exc:
@@ -237,21 +325,17 @@ def ai_news_report() -> dict[str, object]:
             status_code=409,
             detail="Enable local AI insights in Settings before generating a news report.",
         )
+    articles = get_news_articles(
+        preferences.news_lookback_hours,
+        preferences.news_max_articles,
+    )
     try:
         report = generate_news_report(
             preferences.ollama_endpoint,
             preferences.ollama_model,
-            get_news_articles(
-                preferences.news_lookback_hours,
-                preferences.news_max_articles,
-            ),
+            articles,
         )
-        saved = save_ai_report(
-            "news", str(report["model"]), str(report["markdown"]),
-            report.get("generated_at") if isinstance(report.get("generated_at"), str) else None,
-            str(report["scope"]),
-        )
-        return {**report, **saved}
+        return _finalize_ai_report(report, "news", preferences, [], articles)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OllamaUnavailable as exc:

@@ -49,7 +49,7 @@ def validate_ollama_endpoint(endpoint: str) -> str:
 def installed_models(endpoint: str) -> list[dict[str, str | None]]:
     base_url = validate_ollama_endpoint(endpoint)
     try:
-        response = httpx.get(f"{base_url}/api/tags", timeout=5.0)
+        response = httpx.get(f"{base_url}/api/tags", timeout=None)
         response.raise_for_status()
     except (httpx.HTTPError, ValueError) as exc:
         raise OllamaUnavailable(
@@ -309,7 +309,7 @@ def _generate_markdown(
                 "keep_alive": "5m",
                 "options": {"temperature": 0.2},
             },
-            timeout=120.0,
+            timeout=None,
         )
         response.raise_for_status()
     except httpx.TimeoutException as exc:

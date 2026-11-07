@@ -213,10 +213,18 @@ def initialize_db() -> None:
                 markdown TEXT NOT NULL,
                 generated_at TEXT,
                 saved_at TEXT NOT NULL,
-                scope TEXT NOT NULL
+                scope TEXT NOT NULL,
+                metadata TEXT NOT NULL DEFAULT '{}'
             )
             """
         )
+        report_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(ai_reports)").fetchall()
+        }
+        if "metadata" not in report_columns:
+            connection.execute(
+                "ALTER TABLE ai_reports ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'"
+            )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS sips (
@@ -610,6 +618,7 @@ def save_ai_report(
     markdown: str,
     generated_at: str | None,
     scope: str,
+    metadata: dict[str, object] | None = None,
 ) -> dict[str, object]:
     report = {
         "report_id": str(uuid.uuid4()),
@@ -619,13 +628,19 @@ def save_ai_report(
         "generated_at": generated_at,
         "saved_at": _utc_iso(datetime.now(UTC)),
         "scope": scope,
+        "metadata": metadata or {},
     }
     with get_connection() as connection:
         connection.execute(
             """INSERT INTO ai_reports (
-                   report_id, report_type, model, markdown, generated_at, saved_at, scope
-               ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            tuple(report.values()),
+                   report_id, report_type, model, markdown, generated_at, saved_at, scope,
+                   metadata
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                report["report_id"], report["report_type"], report["model"],
+                report["markdown"], report["generated_at"], report["saved_at"],
+                report["scope"], json.dumps(report["metadata"]),
+            ),
         )
     return report
 
@@ -633,7 +648,7 @@ def save_ai_report(
 def list_ai_reports(
     report_type: str | None = None, limit: int = 100
 ) -> list[dict[str, object]]:
-    query = """SELECT report_id, report_type, model, generated_at, saved_at, scope
+    query = """SELECT report_id, report_type, model, generated_at, saved_at, scope, metadata
                FROM ai_reports"""
     parameters: list[object] = []
     if report_type:
@@ -643,7 +658,10 @@ def list_ai_reports(
     parameters.append(limit)
     with get_connection() as connection:
         rows = connection.execute(query, parameters).fetchall()
-    return [dict(row) for row in rows]
+    reports = [dict(row) for row in rows]
+    for report in reports:
+        report["metadata"] = _decode_report_metadata(report.get("metadata"))
+    return reports
 
 
 def get_ai_report(report_id: str) -> dict[str, object] | None:
@@ -651,7 +669,19 @@ def get_ai_report(report_id: str) -> dict[str, object] | None:
         row = connection.execute(
             "SELECT * FROM ai_reports WHERE report_id = ?", (report_id,)
         ).fetchone()
-    return dict(row) if row else None
+    if not row:
+        return None
+    report = dict(row)
+    report["metadata"] = _decode_report_metadata(report.get("metadata"))
+    return report
+
+
+def _decode_report_metadata(value: object) -> dict[str, object]:
+    try:
+        decoded = json.loads(str(value or "{}"))
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
 
 
 def import_manual_positions(items: list[ManualPositionInput], replace_existing: bool) -> int:

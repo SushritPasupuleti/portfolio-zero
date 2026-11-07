@@ -1,6 +1,6 @@
 # Portfolio Puffin — Project Plan
 
-**Status:** Active implementation plan; the repository is an early scaffold.  
+**Status:** Active implementation plan; core local dashboard, preferences, local AI, and gated EOD price refresh are implemented.
 **Planning baseline:** 7 November 2026  
 **Product shape:** A private, local-first portfolio dashboard. Zerodha Kite Personal is the account-data source; separate EOD/NAV sources provide prices where the Personal API does not.
 
@@ -59,16 +59,16 @@ Optional local Gemma analysis may summarize allocation, concentration, and chang
 
 | Area | Present now | Still required |
 | --- | --- | --- |
-| Frontend | React/Vite dashboard shell, API-backed summary/holdings/SIP/source status, automatic and manual Zerodha sync, price-date labels | Import flow, price provenance refinements, charts with text summaries |
-| API | FastAPI health/token status, read-only Kite portfolio adapter, SQLite-backed summary/holdings/SIPs/sources/export, import preview/commit endpoints | Additional provider adapters, schema/migration hardening, market-data source routes |
-| Python | `uv`, `pyproject.toml`, `uv.lock`, Docker build, Make targets | Provider adapters, migrations, and application hardening |
+| Frontend | React/Vite overview, holdings, activity, AI review, glossary, saved settings, Zerodha sync, price provenance | CSV file-picker/parser flow, charts with text summaries, responsive/accessibility review |
+| API | FastAPI read-only Kite adapter, SQLite preferences/portfolio, Ollama model discovery/review, gated yfinance price sync, import preview/commit | Versioned migrations, snapshot history, richer provider recovery |
+| Python | `uv`, `pyproject.toml`, locked yfinance dependency, Docker build, Make targets | Application hardening and dependency maintenance |
 | Runtime | Docker Compose, loopback-bound ports, Vite API proxy, local Streamlit token UI | Health checks, persistent encrypted store, backup/restore, robust lifecycle/recovery |
 | Zerodha | `kiteconnect` dependency; local Streamlit token exchange/save UI; token status check; read-only Personal holdings/positions/MF/SIP sync | Verify live endpoint permissions and add richer partial-source recovery |
-| Prices | Provider research in [market-data-sources.md](market-data-sources.md) | EOD/NAV adapters, symbol mapping, local cache, stale/missing price UI |
-| AI | Local model profiles for MLX and Ollama documented | Model health, grounded insight service, privacy boundary and failure states |
+| Prices | Broker marks plus optional manual/automatic yfinance daily-close adapter for mapped Zerodha equities; source and date stored | Broader ISIN mapping, missing-symbol review, AMFI NAV fallback |
+| AI | Configurable local Ollama endpoint/model, installed-model discovery, grounded snapshot insight endpoint and UI | Review summary persistence/history, larger fixture/quality review |
 | Quality | API test cases exist for health, token status/save, imports, and summary | Run/expand checks for real adapters, storage security, calculations, and manual accessibility review |
 
-The dashboard now syncs read-only Kite holdings, net positions, mutual-fund holdings, and SIP schedules through the backend and stores the latest successful snapshot locally. The token setup helper stores credentials through the local secret-store layer. The app uses broker-reported prices in account responses; a separate EOD price provider remains deferred pending the Yahoo terms/permission review. Imported normalized rows can be stored through the API, but there is no CSV parser/file-import UI yet.
+The dashboard syncs read-only Kite holdings, net positions, mutual-fund holdings, and SIP schedules through the backend and stores the latest successful snapshot locally. Token credentials use the local secret-store layer. SQLite preferences control manual-row visibility, Zerodha startup sync, local Ollama endpoint/model, and the optional yfinance integration. Yahoo refresh remains off until both enablement and permission acknowledgment are saved. Manual normalized imports can be stored through the API, but a CSV parser/file-import UI is still outstanding.
 
 ## 5. Source and pricing decisions
 
@@ -173,14 +173,14 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 
 ### Phase 2 — Yahoo daily-price adapter and valuation
 
-- [ ] Implement a replaceable `MarketDataProvider` interface with Yahoo Finance through `yfinance` as the requested candidate.
+- [x] Implement Yahoo Finance through `yfinance` for raw daily closes on mapped Zerodha NSE/BSE equity holdings.
 - [ ] Confirm the current Yahoo terms and permission for automated personal use before enabling downloads. `yfinance`'s no-key convenience is not evidence of an official API or authorization; keep the terms-review date and decision in docs.
 - [ ] Map Zerodha instruments to Yahoo symbols using exchange + symbol (often with exchange suffixes) and ISIN where available. Validate matches; ambiguous rows remain unpriced pending review.
-- [ ] Batch and cache daily history for held instruments; avoid one request per field/row. Use raw daily close for current value and separately labeled adjusted history for charts.
+- [x] Batch daily price retrieval for held instruments and use raw daily close for current value; store source/date provenance.
 - [ ] Handle throttling, network failures, missing tickers, data corrections, and upstream breaks without clearing account holdings. Offer manual price import or a properly licensed provider if Yahoo access is not permitted/available.
 - [ ] Use broker-reported price/P&L only when returned in an account response and clearly label it with its source and time; do not call Personal's unavailable quote APIs.
 - [ ] Read MF NAV and NAV date from Zerodha MF holdings; implement AMFI fallback only for missing/stale NAV with ISIN matching and source labels.
-- [ ] Add freshness badges and stale/missing price states; retain last successful cache during provider outage.
+- [x] Add a manual price-refresh control, settings gates, and source activity state; retain prior price values on provider failure.
 - [ ] Define formulas and reconcile totals against sanitized fixtures.
 
 **Exit criteria:** Automated Yahoo use has a documented permission/terms decision; each mark has a provider/date/type; daily close is never presented as live; missing symbol mappings are visible; ownership remains sourced from Zerodha; provider outage does not delete holdings.
@@ -206,10 +206,12 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 - [x] Read API summary/token status in the React UI and show a setup-required state when no token is configured.
 - [ ] Replace token-configured as a proxy for connection with API-backed sync/source status; a saved token alone must not be presented as a live portfolio connection.
 - [ ] Render summary values only when they trace to real Zerodha snapshots or a reviewed import; distinguish imported test/sample records from live broker data.
-- [ ] Build distinct equities, mutual funds, positions, and SIP sections.
+- [x] Add holdings and SIP views plus asset allocation overview.
 - [ ] Build allocation by asset class/instrument and configurable concentration cues.
 - [ ] Show amount, quantity/units, cost, price/NAV, value, P&L, source, and date at the level supported by the data.
-- [ ] Add refresh feedback, connection repair, last success vs last attempt, stale and partial warnings.
+- [x] Add refresh feedback and source activity with last success/attempt, stale, and partial states.
+- [x] Add persisted manual-import visibility, auto-sync, and local AI/market-data settings.
+- [x] Add searchable glossary and local AI portfolio snapshot review.
 - [ ] Add accessible snapshot history; do not call it historical portfolio performance until transaction/ownership history is complete.
 
 **Exit criteria:** Every number is explainable from stored source observations; labels distinguish EOD vs broker-reported/NAV prices; all states are keyboard and screen-reader usable.

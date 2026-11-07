@@ -1,4 +1,4 @@
-.PHONY: setup dev api web token-ui docker-up docker-down frontend-install python-sync
+.PHONY: setup dev dev-ai api web token-ui docker-up docker-down frontend-install python-sync
 
 setup: python-sync frontend-install
 
@@ -20,6 +20,9 @@ token-ui:
 
 dev docker-up:
 	docker compose up --build
+
+dev-ai:
+	docker compose --profile ai up --build
 
 docker-down:
 	docker compose down

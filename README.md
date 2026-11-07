@@ -1,10 +1,10 @@
 # Portfolio Puffin
 
-A local-first, read-only portfolio dashboard. Zerodha Kite Connect Personal provides account holdings, positions, mutual-fund holdings, and SIP schedules. The dashboard uses broker-reported prices returned with the portfolio snapshot; separate historical market data is not integrated.
+A local-first, read-only portfolio dashboard. Zerodha Kite Connect Personal provides account holdings, positions, mutual-fund holdings, and SIP schedules. Preferences are stored in SQLite. Optional Yahoo Finance daily closes can refresh Zerodha equity marks through `yfinance` after you enable the feature and confirm you have permission for that access.
 
 ## Current state
 
-The repository has a React dashboard, FastAPI API, SQLite storage, read-only Kite portfolio sync, portfolio summary/holdings/SIP/source/export endpoints, import preview/commit endpoints, and a Streamlit token setup UI. When a token is configured, the dashboard syncs on launch and from **Sync Zerodha**. Syncs fetch holdings, net positions, Coin MF holdings, and SIP schedules, then replace the previous Zerodha snapshot while preserving the last good snapshot on errors. Broker-reported price values are labeled with their returned date where available.
+The repository has a React dashboard, FastAPI API, SQLite storage, read-only Kite portfolio sync, portfolio summary/holdings/SIP/source/export endpoints, import preview/commit endpoints, and a Streamlit token setup UI. Settings include manual-import visibility, Zerodha refresh behavior, local Ollama endpoint/model, and optional Yahoo daily-close refresh. The UI also includes a glossary, source activity, and local AI portfolio review. Syncs preserve the last good snapshot on errors and prices show their source/date.
 
 See the [detailed project plan](docs/project-plan.md) for the revised roadmap and [market-data source assessment](docs/market-data-sources.md) for the Personal/Yahoo distinction and data terms.
 
@@ -84,11 +84,11 @@ The token UI obtains a daily access token. The React dashboard uses it through t
 
 ## Stock prices and NAV
 
-Use Zerodha as the source of what you own. Current portfolio valuation uses the `last_price` returned with Kite holdings/positions and the latest NAV returned with Coin MF holdings; the UI labels the value date when supplied. Separate Yahoo Finance history through `yfinance` remains deferred: it is a free, no-key Python client but not an official Yahoo API, and automated collection needs permission under Yahoo's terms. Read [docs/market-data-sources.md](docs/market-data-sources.md) for the permission gate and fallback options. Prices in the current snapshot are broker-reported marks, not a dedicated live quote feed.
+Use Zerodha as the source of what you own. Valuation initially uses Kite's `last_price` and Coin NAV. An optional **Sync prices** action fetches raw daily closes for supported Zerodha equity tickers through yfinance, then labels the source and date. It is off by default; the UI requires a permission acknowledgment before any download, and automatic refresh also requires its own toggle. Yahoo is not an official API and its terms may restrict automated collection. Read [docs/market-data-sources.md](docs/market-data-sources.md) before enabling.
 
 ## Local model options
 
-See [infra/llm-profiles.md](infra/llm-profiles.md) for MLX and Ollama setup. The model is optional and must remain local; no brokerage data should be sent to a hosted LLM.
+See [infra/llm-profiles.md](infra/llm-profiles.md) for Ollama setup. Gemma 4 presets are available in Settings; choose a model that fits your memory. AI review is off by default and sends the holdings snapshot only to the configured local Ollama endpoint. No brokerage data should be sent to a hosted LLM.
 
 ## Common commands
 
@@ -99,6 +99,7 @@ See [infra/llm-profiles.md](infra/llm-profiles.md) for MLX and Ollama setup. The
 | `make web` | Run the Vite development server |
 | `make token-ui` | Run the loopback-only Zerodha token setup page |
 | `make dev` | Build and start Docker Compose |
+| `make dev-ai` | Start the app with the optional local Ollama service |
 | `make docker-down` | Stop Docker Compose |
 | `make -C backend lint` | Run Ruff against the API |
 | `make -C backend lock` | Update Python dependency lockfile |

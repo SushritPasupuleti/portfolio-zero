@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
-from .models import AllocationBucket, Holding, PortfolioSummary, Sip, SourceStatus
+from .models import AllocationBucket, Holding, PortfolioSummary, Preferences, Sip, SourceStatus
 from .secrets import delete_secret, get_secret, save_secret
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "portfolio_puffin.db"
@@ -115,6 +116,7 @@ def initialize_db() -> None:
                 value REAL,
                 pnl REAL,
                 price_as_of TEXT,
+                price_source TEXT,
                 currency TEXT NOT NULL DEFAULT 'INR',
                 source_name TEXT NOT NULL,
                 as_of TEXT NOT NULL
@@ -127,6 +129,17 @@ def initialize_db() -> None:
         }
         if "price_as_of" not in holding_columns:
             connection.execute("ALTER TABLE holdings ADD COLUMN price_as_of TEXT")
+        if "price_source" not in holding_columns:
+            connection.execute("ALTER TABLE holdings ADD COLUMN price_source TEXT")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS preferences (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS sips (
@@ -155,6 +168,43 @@ def initialize_db() -> None:
             """
         )
     _migrate_legacy_tokens()
+
+
+def get_preferences() -> Preferences:
+    defaults = Preferences()
+    with get_connection() as connection:
+        rows = connection.execute("SELECT key, value FROM preferences").fetchall()
+    values = defaults.model_dump()
+    values["ollama_endpoint"] = os.environ.get(
+        "LLM_BASE_URL", values["ollama_endpoint"]
+    )
+    values["ollama_model"] = os.environ.get("LLM_MODEL", values["ollama_model"])
+    for row in rows:
+        try:
+            values[row["key"]] = json.loads(row["value"])
+        except (TypeError, ValueError):
+            continue
+    return Preferences.model_validate(values)
+
+
+def save_preferences(values: dict[str, object]) -> Preferences:
+    known = set(Preferences.model_fields)
+    now = _utc_iso(datetime.now(UTC))
+    with get_connection() as connection:
+        for key, value in values.items():
+            if key not in known:
+                continue
+            connection.execute(
+                """
+                INSERT INTO preferences (key, value, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(key) DO UPDATE SET
+                    value = excluded.value,
+                    updated_at = excluded.updated_at
+                """,
+                (key, json.dumps(value), now),
+            )
+    return get_preferences()
 
 
 def save_zerodha_token(access_token: str, api_key: str | None = None) -> None:
@@ -237,7 +287,13 @@ def upsert_source_status(
         )
 
 
-def get_sources() -> list[SourceStatus]:
+def _is_manual_source(source_name: str) -> bool:
+    normalized = source_name.casefold()
+    manual_names = {"manual", "manual-import", "csv-import", "sample-import"}
+    return normalized in manual_names or normalized.startswith("manual-")
+
+
+def get_sources(include_manual: bool = True) -> list[SourceStatus]:
     with get_connection() as connection:
         rows = connection.execute(
             """
@@ -255,7 +311,7 @@ def get_sources() -> list[SourceStatus]:
             ORDER BY source_name
             """
         ).fetchall()
-    return [
+    sources = [
         SourceStatus(
             source=row["source_name"],
             source_type=row["source_type"],
@@ -269,9 +325,10 @@ def get_sources() -> list[SourceStatus]:
         )
         for row in rows
     ]
+    return [source for source in sources if include_manual or not _is_manual_source(source.source)]
 
 
-def get_holdings() -> list[Holding]:
+def get_holdings(include_manual: bool = True) -> list[Holding]:
     with get_connection() as connection:
         rows = connection.execute(
             """
@@ -286,6 +343,7 @@ def get_holdings() -> list[Holding]:
                 value,
                 pnl,
                 price_as_of,
+                price_source,
                 currency,
                 source_name,
                 as_of
@@ -293,7 +351,7 @@ def get_holdings() -> list[Holding]:
             ORDER BY instrument_name
             """
         ).fetchall()
-    return [
+    holdings = [
         Holding(
             id=row["id"],
             instrument_name=row["instrument_name"],
@@ -305,15 +363,21 @@ def get_holdings() -> list[Holding]:
             value=row["value"],
             pnl=row["pnl"],
             price_as_of=_from_db(row["price_as_of"]),
+            price_source=row["price_source"],
             currency=row["currency"],
             source=row["source_name"],
             as_of=_from_db(row["as_of"]),
         )
         for row in rows
     ]
+    return [
+        holding
+        for holding in holdings
+        if include_manual or not _is_manual_source(holding.source)
+    ]
 
 
-def get_sips() -> list[Sip]:
+def get_sips(include_manual: bool = True) -> list[Sip]:
     with get_connection() as connection:
         rows = connection.execute(
             """
@@ -330,7 +394,7 @@ def get_sips() -> list[Sip]:
             ORDER BY scheme_name
             """
         ).fetchall()
-    return [
+    sips = [
         Sip(
             id=row["id"],
             scheme_name=row["scheme_name"],
@@ -343,10 +407,11 @@ def get_sips() -> list[Sip]:
         )
         for row in rows
     ]
+    return [sip for sip in sips if include_manual or not _is_manual_source(sip.source)]
 
 
-def calculate_summary() -> PortfolioSummary:
-    rows = get_holdings()
+def calculate_summary(include_manual: bool = True) -> PortfolioSummary:
+    rows = get_holdings(include_manual=include_manual)
     if not rows:
         return PortfolioSummary(
             total_value=None,
@@ -356,7 +421,7 @@ def calculate_summary() -> PortfolioSummary:
             currency="INR",
             as_of=None,
             status="empty",
-            sources=get_sources(),
+            sources=get_sources(include_manual=include_manual),
             warnings=["No holdings have been imported yet."],
         )
 
@@ -394,13 +459,13 @@ def calculate_summary() -> PortfolioSummary:
         currency="INR",
         as_of=as_of,
         status=status,
-        sources=get_sources(),
+        sources=get_sources(include_manual=include_manual),
         warnings=warnings,
     )
 
 
-def calculate_allocations() -> list[AllocationBucket]:
-    holdings = get_holdings()
+def calculate_allocations(include_manual: bool = True) -> list[AllocationBucket]:
+    holdings = get_holdings(include_manual=include_manual)
     if not holdings:
         return []
 
@@ -476,6 +541,7 @@ def persist_holdings(rows: list[dict], source_name: str) -> int:
                 "value": _coerce_float(row.get("value")),
                 "pnl": _coerce_float(row.get("pnl")),
                 "price_as_of": _utc_iso(_coerce_datetime(row.get("price_as_of"))),
+                "price_source": row.get("price_source") or source_name,
                 "currency": row.get("currency") or "INR",
                 "source_name": source_name,
                 "as_of": (
@@ -496,10 +562,11 @@ def persist_holdings(rows: list[dict], source_name: str) -> int:
                     value,
                     pnl,
                     price_as_of,
+                    price_source,
                     currency,
                     source_name,
                     as_of
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     instrument_name = excluded.instrument_name,
                     asset_class = excluded.asset_class,
@@ -510,6 +577,7 @@ def persist_holdings(rows: list[dict], source_name: str) -> int:
                     value = excluded.value,
                     pnl = excluded.pnl,
                     price_as_of = excluded.price_as_of,
+                    price_source = excluded.price_source,
                     currency = excluded.currency,
                     source_name = excluded.source_name,
                     as_of = excluded.as_of
@@ -525,6 +593,7 @@ def persist_holdings(rows: list[dict], source_name: str) -> int:
                     item["value"],
                     item["pnl"],
                     item["price_as_of"],
+                    item["price_source"],
                     item["currency"],
                     item["source_name"],
                     item["as_of"],
@@ -596,8 +665,8 @@ def replace_source_snapshot(
                 """
                 INSERT INTO holdings (
                     id, instrument_name, asset_class, symbol, quantity, average_cost,
-                    last_price, value, pnl, price_as_of, currency, source_name, as_of
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    last_price, value, pnl, price_as_of, price_source, currency, source_name, as_of
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row["id"],
@@ -610,6 +679,7 @@ def replace_source_snapshot(
                     _coerce_float(row.get("value")),
                     _coerce_float(row.get("pnl")),
                     _utc_iso(_coerce_datetime(row.get("price_as_of"))),
+                    row.get("price_source") or source_name,
                     row.get("currency") or "INR",
                     source_name,
                     _utc_iso(_coerce_datetime(row.get("as_of"))) or now,
@@ -638,12 +708,40 @@ def replace_source_snapshot(
     return len(holding_rows), len(sip_rows)
 
 
+def update_market_prices(prices: dict[str, dict[str, object]], source: str) -> int:
+    updated = 0
+    with get_connection() as connection:
+        for holding_id, quote in prices.items():
+            close = _coerce_float(quote.get("close"))
+            price_date = _utc_iso(_coerce_datetime(quote.get("price_as_of")))
+            if close is None or price_date is None:
+                continue
+            cursor = connection.execute(
+                """
+                UPDATE holdings
+                SET last_price = ?,
+                    value = quantity * ?,
+                    pnl = CASE
+                        WHEN average_cost IS NOT NULL THEN (?-average_cost)*quantity
+                        ELSE pnl
+                    END,
+                    price_as_of = ?,
+                    price_source = ?
+                WHERE id = ? AND asset_class = 'equity'
+                """,
+                (close, close, close, price_date, source, holding_id),
+            )
+            updated += cursor.rowcount
+    return updated
+
+
 def clear_local_data() -> None:
     with get_connection() as connection:
         connection.execute("DELETE FROM holdings")
         connection.execute("DELETE FROM sips")
         connection.execute("DELETE FROM sources")
         connection.execute("DELETE FROM imports")
+        connection.execute("DELETE FROM preferences")
         connection.execute("DELETE FROM app_settings")
 
 

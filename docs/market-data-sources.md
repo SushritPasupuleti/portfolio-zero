@@ -8,7 +8,7 @@ The `yfinance` library is Apache-2.0, but that license covers the client code, n
 
 Use Zerodha's mutual-fund holdings and SIP reads for account-specific units, cost, and schedules. Use the NAV and NAV date returned with those account records when present. [AMFI's official NAV download](https://www.amfiindia.com/net-asset-value/nav-download) can be an optional fallback for missing NAV values; match by ISIN and preserve its date/source.
 
-The current dashboard sync uses broker-reported `last_price` fields returned with Kite portfolio records for snapshot valuation. These are not fetched through the dedicated quote APIs and are not represented as a live stream. Yahoo Finance history is not currently integrated; it remains subject to the permission gate below.
+The current dashboard sync uses broker-reported `last_price` fields returned with Kite portfolio records for snapshot valuation. These are not fetched through the dedicated quote APIs and are not represented as a live stream. An optional yfinance adapter updates raw daily closes for mapped Zerodha NSE/BSE equity holdings. It is disabled by default and requires both an enable toggle and the user's permission acknowledgment; automatic refresh also has a separate toggle. Mutual funds and derivatives are not priced by this adapter.
 
 ## Keep the sources distinct
 
@@ -17,7 +17,7 @@ The current dashboard sync uses broker-reported `last_price` fields returned wit
 | Equity holdings, quantities, average prices, account positions | Zerodha Kite Personal APIs | Refreshed after daily login; account API response timestamp is stored |
 | Coin MF units, holdings, SIP schedule | Zerodha Kite Personal MF read APIs | Use returned NAV and `last_price_date` when provided; confirm endpoint availability on Personal during connector implementation |
 | Equity prices included in current portfolio snapshot | Zerodha Kite holdings/positions response | Broker-reported `last_price`; display returned value date where available; not a dedicated quote feed |
-| Equity daily prices/history | Yahoo Finance via `yfinance`, subject to its automated-access terms; not yet integrated | No API key for common use; unofficial/undocumented endpoints; cache and label actual market date; never claim live data |
+| Equity daily prices/history | Yahoo Finance via `yfinance`, subject to its automated-access terms; optional manual/automatic sync is implemented behind a permission gate | No API key for common use; unofficial/undocumented endpoints; cache and label actual market date; never claim live data |
 | MF NAV fallback | AMFI official NAV reports | Daily NAV publication; not intraday |
 | Live quotes/intraday candles | Not in initial scope | Kite Personal excludes the live and historical market-data products; `yfinance` is not treated as a supported live feed |
 
@@ -32,7 +32,7 @@ Kite's portfolio holdings response schema includes account quantities, average p
 - **Scope:** Plan for daily historical bars/last available close only. Do not use it for a live price display, order execution, or trading alerts.
 - **Privacy:** Send only public ticker symbols and requested date ranges. Never send holding quantities, account IDs, cost basis, tokens, or statements.
 
-Review the [`yfinance` README](https://github.com/ranaroussi/yfinance), its [API reference](https://ranaroussi.github.io/yfinance/reference/index.html), and Yahoo's current terms before implementation and before release. Record the review date and user's authorization decision in the implementation. This review was made on **7 November 2026**.
+Review the [`yfinance` README](https://github.com/ranaroussi/yfinance), its [download API reference](https://ranaroussi.github.io/yfinance/reference/api/yfinance.download.html), and Yahoo's current terms before enabling use. The app records the permission acknowledgment in local preferences but cannot determine whether a particular use is authorized. This review was made on **7 November 2026**.
 
 ## Pricing rules
 

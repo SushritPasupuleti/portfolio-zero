@@ -13,13 +13,20 @@ from kiteconnect.exceptions import (
 )
 
 from .kite_adapter import SOURCE_NAME, SOURCE_TYPE, sync_portfolio
-from .models import ImportPreviewRequest
+from .models import ImportPreviewRequest, Preferences
+from .ollama_adapter import (
+    OllamaUnavailable,
+    generate_portfolio_insights,
+    installed_models,
+    validate_ollama_endpoint,
+)
 from .storage import (
     calculate_allocations,
     calculate_summary,
     clear_local_data,
     delete_zerodha_token,
     get_holdings,
+    get_preferences,
     get_sips,
     get_sources,
     get_zerodha_token,
@@ -27,9 +34,11 @@ from .storage import (
     insert_import_record,
     persist_holdings,
     persist_sips,
+    save_preferences,
     save_zerodha_token,
     upsert_source_status,
 )
+from .yfinance_adapter import sync_daily_prices
 
 
 @asynccontextmanager
@@ -121,6 +130,101 @@ def connection_status() -> dict[str, object]:
     }
 
 
+@app.get("/api/preferences")
+def read_preferences() -> dict[str, object]:
+    return get_preferences().model_dump()
+
+
+@app.put("/api/preferences")
+def update_preferences(payload: Preferences) -> dict[str, object]:
+    try:
+        endpoint = validate_ollama_endpoint(payload.ollama_endpoint)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if payload.auto_sync_yfinance and not (
+        payload.yfinance_sync_enabled and payload.yahoo_terms_confirmed
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Enable Yahoo price sync and confirm permitted automated use before "
+                "enabling automatic downloads."
+            ),
+        )
+    values = payload.model_dump()
+    values["ollama_endpoint"] = endpoint
+    return save_preferences(values).model_dump()
+
+
+@app.get("/api/ai/models")
+def ollama_models(endpoint: str | None = None) -> dict[str, object]:
+    preferences = get_preferences()
+    selected_endpoint = endpoint or preferences.ollama_endpoint
+    try:
+        models = installed_models(selected_endpoint)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OllamaUnavailable as exc:
+        return {
+            "available": False,
+            "endpoint": selected_endpoint,
+            "models": [],
+            "message": str(exc),
+        }
+    return {
+        "available": True,
+        "endpoint": selected_endpoint,
+        "models": models,
+        "message": f"Found {len(models)} installed local models.",
+    }
+
+
+@app.post("/api/ai/recommendations")
+def portfolio_recommendations() -> dict[str, object]:
+    preferences = get_preferences()
+    if not preferences.ollama_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail="Enable local AI insights in Settings before generating a review.",
+        )
+    holdings = get_holdings(include_manual=preferences.show_manual_imports)
+    try:
+        return generate_portfolio_insights(
+            preferences.ollama_endpoint,
+            preferences.ollama_model,
+            holdings,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OllamaUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/market-data/sync")
+def sync_market_data() -> dict[str, int | str | list[str]]:
+    preferences = get_preferences()
+    if not preferences.yfinance_sync_enabled or not preferences.yahoo_terms_confirmed:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Enable Yahoo Finance sync and confirm that automated use is permitted "
+                "in Settings before downloading prices."
+            ),
+        )
+    try:
+        return sync_daily_prices()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "The yfinance dependency is unavailable. Reinstall backend dependencies "
+                "with `make setup`."
+            ),
+        ) from exc
+
+
 @app.post("/api/portfolio/sync")
 def sync_zerodha_portfolio() -> dict[str, int | str]:
     credentials = get_zerodha_token()
@@ -203,8 +307,10 @@ def sync_zerodha_portfolio() -> dict[str, int | str]:
 
 @app.get("/api/portfolio/summary")
 def portfolio_summary() -> dict:
+    preferences = get_preferences()
     token = get_zerodha_token()
-    if not token.get("access_token"):
+    visible_holdings = get_holdings(include_manual=preferences.show_manual_imports)
+    if not token.get("access_token") and not visible_holdings:
         return {
             "total_value": None,
             "day_change": None,
@@ -220,27 +326,44 @@ def portfolio_summary() -> dict:
             ],
             "message": "Setup required",
         }
-    return calculate_summary().model_dump(mode="json")
+    return calculate_summary(include_manual=preferences.show_manual_imports).model_dump(mode="json")
 
 
 @app.get("/api/portfolio/holdings")
 def portfolio_holdings() -> dict[str, list[dict]]:
-    return {"items": [holding.model_dump(mode="json") for holding in get_holdings()]}
+    preferences = get_preferences()
+    return {
+        "items": [
+            holding.model_dump(mode="json")
+            for holding in get_holdings(include_manual=preferences.show_manual_imports)
+        ]
+    }
 
 
 @app.get("/api/portfolio/allocations")
 def portfolio_allocations() -> list[dict]:
-    return [bucket.model_dump(mode="json") for bucket in calculate_allocations()]
+    preferences = get_preferences()
+    return [
+        bucket.model_dump(mode="json")
+        for bucket in calculate_allocations(include_manual=preferences.show_manual_imports)
+    ]
 
 
 @app.get("/api/sources")
 def collection_sources() -> dict[str, list[dict]]:
-    return {"items": [source.model_dump(mode="json") for source in get_sources()]}
+    preferences = get_preferences()
+    return {
+        "items": [
+            source.model_dump(mode="json")
+            for source in get_sources(include_manual=preferences.show_manual_imports)
+        ]
+    }
 
 
 @app.get("/api/portfolio/export")
 def export_portfolio_csv() -> dict[str, str]:
-    holdings = get_holdings()
+    preferences = get_preferences()
+    holdings = get_holdings(include_manual=preferences.show_manual_imports)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
@@ -253,6 +376,7 @@ def export_portfolio_csv() -> dict[str, str]:
         "value",
         "pnl",
         "price_as_of",
+        "price_source",
         "currency",
         "source",
         "as_of",
@@ -268,6 +392,7 @@ def export_portfolio_csv() -> dict[str, str]:
             holding.value,
             holding.pnl,
             holding.price_as_of.isoformat() if holding.price_as_of else "",
+            holding.price_source,
             holding.currency,
             holding.source,
             holding.as_of.isoformat() if holding.as_of else "",
@@ -384,4 +509,10 @@ def delete_local_data() -> dict[str, bool | str]:
 
 @app.get("/api/portfolio/sips")
 def portfolio_sips() -> dict[str, list[dict]]:
-    return {"items": [sip.model_dump(mode="json") for sip in get_sips()]}
+    preferences = get_preferences()
+    return {
+        "items": [
+            sip.model_dump(mode="json")
+            for sip in get_sips(include_manual=preferences.show_manual_imports)
+        ]
+    }

@@ -1,16 +1,36 @@
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  Activity, ArrowDownLeft, ArrowUpRight, Bot, BriefcaseBusiness, ChartNoAxesCombined,
-  ChevronDown, CircleHelp, FileUp, Landmark, LayoutDashboard, Menu, RefreshCw,
-  Settings2, ShieldCheck, WalletCards,
+  Activity, ArrowDownLeft, ArrowUpRight, BookOpen, Bot, BriefcaseBusiness,
+  ChartNoAxesCombined, ChevronDown, CircleHelp, FileUp,
+  Landmark, LayoutDashboard, Menu, RefreshCw, Search, Server, Settings2, ShieldCheck,
+  WalletCards,
 } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Card } from './components/ui/card';
 import './style.css';
 
 type Health = 'checking' | 'connected' | 'unavailable';
-type Section = 'Overview' | 'Holdings' | 'Activity' | 'AI insights';
+type Section = 'Overview' | 'Holdings' | 'Activity' | 'AI insights' | 'Glossary' | 'Settings';
+
+type Preferences = {
+  show_manual_imports: boolean;
+  auto_sync_zerodha: boolean;
+  ollama_enabled: boolean;
+  ollama_endpoint: string;
+  ollama_model: string;
+  yfinance_sync_enabled: boolean;
+  yahoo_terms_confirmed: boolean;
+  auto_sync_yfinance: boolean;
+};
+
+type AIReview = {
+  summary: string;
+  insights: { title: string; detail: string; evidence: string; type: string }[];
+  model: string;
+  generated_at: string | null;
+  scope: string;
+};
 
 type PortfolioSummary = {
   total_value: number | null;
@@ -42,6 +62,7 @@ type HoldingRow = {
   value: number | null;
   pnl: number | null;
   price_as_of: string | null;
+  price_source: string | null;
   currency: string;
   source: string;
   as_of: string | null;
@@ -80,6 +101,35 @@ const navigation: { label: Section; icon: typeof LayoutDashboard }[] = [
   { label: 'Holdings', icon: BriefcaseBusiness },
   { label: 'Activity', icon: Activity },
   { label: 'AI insights', icon: Bot },
+  { label: 'Glossary', icon: BookOpen },
+  { label: 'Settings', icon: Settings2 },
+];
+
+const ollamaEndpoints = [
+  { label: 'Local Ollama on this machine', value: 'http://127.0.0.1:11434' },
+  { label: 'Ollama on host from Docker API', value: 'http://host.docker.internal:11434' },
+  { label: 'Ollama service in Docker Compose (make dev-ai)', value: 'http://ollama:11434' },
+];
+
+const modelPresets = [
+  { name: 'gemma4:26b-a4b', description: 'Gemma 4 26B A4B MoE · 16–19 GB · high-capability' },
+  { name: 'gemma4:e2b', description: 'Gemma 4 E2B · 4.6–7.5 GB · constrained local systems' },
+  { name: 'gemma4:e4b', description: 'Gemma 4 E4B · 6.6–9.5 GB · modest local systems' },
+];
+
+const glossaryTerms = [
+  { term: 'Asset allocation', definition: 'How portfolio value is divided across asset classes such as equity, mutual funds, and derivatives.' },
+  { term: 'Average cost', definition: 'The average acquisition price recorded for the current quantity. It may exclude fees, taxes, or earlier realized trades.' },
+  { term: 'Daily close', definition: 'The last reported closing price for a completed trading session. It is delayed market data, not a live quote.' },
+  { term: 'Last price', definition: 'The latest price supplied by the selected source. Its date and source are shown beside the holding.' },
+  { term: 'Market value', definition: 'Quantity or units multiplied by the selected last price or NAV.' },
+  { term: 'MoE', definition: 'Mixture of Experts: a model architecture that activates a subset of its experts for each token. Total model size still affects memory requirements.' },
+  { term: 'NAV', definition: 'Net Asset Value per mutual-fund unit. NAV is published periodically and can be older than a stock quote.' },
+  { term: 'P&L', definition: 'Profit and loss. In this dashboard it is based on the source response or current price relative to recorded average cost.' },
+  { term: 'SIP', definition: 'Systematic Investment Plan: a recurring mutual-fund investment schedule.' },
+  { term: 'T1 quantity', definition: 'Shares bought recently that are awaiting settlement. Kite may report them separately from settled quantity.' },
+  { term: 'Net position', definition: 'The current net quantity in an open position after buys and sells, including short or derivative exposure.' },
+  { term: 'Source date', definition: 'The date attached to a price or NAV. The snapshot fetch time can differ from the underlying market-data date.' },
 ];
 
 function App() {
@@ -93,9 +143,20 @@ function App() {
   const [allocations, setAllocations] = useState<AllocationBucket[]>([]);
   const [sources, setSources] = useState<SourceStatusItem[]>([]);
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
+  const [preferences, setPreferences] = useState<Preferences | null>(null);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [ollamaModels, setOllamaModels] = useState<{ name: string; size: string | null }[]>([]);
+  const [modelStatus, setModelStatus] = useState('');
+  const [aiReview, setAiReview] = useState<AIReview | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [glossarySearch, setGlossarySearch] = useState('');
   const today = new Intl.DateTimeFormat('en-IN', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
   }).format(new Date()).toUpperCase();
+  const displayHoldings = activeSection === 'Overview' ? holdings.slice(0, 5) : holdings;
+  const filteredGlossary = glossaryTerms.filter((item) =>
+    `${item.term} ${item.definition}`.toLowerCase().includes(glossarySearch.toLowerCase()),
+  );
 
   const formatCurrency = (value: number | null) => {
     if (value == null) return '—';
@@ -116,6 +177,10 @@ function App() {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return '—';
     return date.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+
+  const updatePreference = <K extends keyof Preferences>(key: K, value: Preferences[K]) => {
+    setPreferences((current) => current ? { ...current, [key]: value } : current);
   };
 
   async function loadSummary() {
@@ -183,7 +248,40 @@ function App() {
     }
   }
 
-  async function syncPortfolio() {
+  async function loadPreferences(): Promise<Preferences | null> {
+    try {
+      const response = await fetch('/api/preferences');
+      if (!response.ok) throw new Error('Settings could not be loaded.');
+      const payload = (await response.json()) as Preferences;
+      setPreferences(payload);
+      return payload;
+    } catch {
+      setNotice('Saved settings could not be loaded from the local API.');
+      return null;
+    }
+  }
+
+  async function requestPriceSync() {
+    const response = await fetch('/api/market-data/sync', { method: 'POST' });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || 'Daily price sync failed.');
+    await Promise.all([loadSummary(), loadPortfolioData()]);
+    return payload as { updated: number; message: string };
+  }
+
+  async function syncMarketData() {
+    setRefreshing(true);
+    try {
+      const result = await requestPriceSync();
+      setNotice(result.message);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Price sync failed.');
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
+  async function syncPortfolio(forceBroker = true) {
     setRefreshing(true);
     let apiResponded = false;
     try {
@@ -191,24 +289,28 @@ function App() {
       if (!response.ok) throw new Error('API unavailable');
       apiResponded = true;
       setApiHealth('connected');
-      const nextTokenStatus = await loadTokenStatus();
+      const [nextTokenStatus, currentPreferences] = await Promise.all([
+        loadTokenStatus(),
+        loadPreferences(),
+      ]);
       await Promise.all([loadSummary(), loadPortfolioData()]);
-      if (!nextTokenStatus.configured) {
+      if (nextTokenStatus.configured && (forceBroker || currentPreferences?.auto_sync_zerodha)) {
+        setNotice('Syncing your read-only portfolio snapshot from Zerodha…');
+        const syncResponse = await fetch('/api/portfolio/sync', { method: 'POST' });
+        const syncPayload = await syncResponse.json();
+        if (!syncResponse.ok) throw new Error(syncPayload.detail || 'Zerodha portfolio sync failed.');
+        await Promise.all([loadSummary(), loadPortfolioData()]);
+        setNotice(`Updated from Zerodha: ${syncPayload.holdings_synced} holdings and ${syncPayload.sips_synced} SIPs.`);
+      } else if (!nextTokenStatus.configured) {
         setNotice(nextTokenStatus.message);
-        return;
+      } else {
+        setNotice('Showing the latest saved local snapshot.');
       }
 
-      setNotice('Syncing your read-only portfolio snapshot from Zerodha…');
-      const syncResponse = await fetch('/api/portfolio/sync', { method: 'POST' });
-      const syncPayload = await syncResponse.json();
-      if (!syncResponse.ok) {
-        throw new Error(syncPayload.detail || 'Zerodha portfolio sync failed.');
+      if (currentPreferences?.auto_sync_yfinance && currentPreferences.yahoo_terms_confirmed) {
+        const priceResult = await requestPriceSync();
+        setNotice(priceResult.message);
       }
-
-      await Promise.all([loadSummary(), loadPortfolioData()]);
-      setNotice(
-        `Updated from Zerodha: ${syncPayload.holdings_synced} holdings and ${syncPayload.sips_synced} SIPs.`,
-      );
     } catch (error) {
       if (!apiResponded) setApiHealth('unavailable');
       else await Promise.all([loadSummary(), loadPortfolioData()]);
@@ -217,6 +319,57 @@ function App() {
         : 'The local API or Zerodha could not be reached.');
     } finally {
       setRefreshing(false);
+    }
+  }
+
+  async function saveSettings() {
+    if (!preferences) return;
+    setSettingsSaving(true);
+    try {
+      const response = await fetch('/api/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(preferences),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Settings could not be saved.');
+      setPreferences(payload as Preferences);
+      await Promise.all([loadSummary(), loadPortfolioData()]);
+      setNotice('Preferences saved to the local SQLite database.');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Settings could not be saved.');
+    } finally {
+      setSettingsSaving(false);
+    }
+  }
+
+  async function discoverOllamaModels() {
+    setModelStatus('Checking the saved local Ollama endpoint…');
+    try {
+      const endpoint = preferences?.ollama_endpoint ?? '';
+      const response = await fetch(`/api/ai/models?endpoint=${encodeURIComponent(endpoint)}`);
+      const payload = await response.json();
+      if (!payload.available) throw new Error(payload.message || 'Ollama is unavailable.');
+      setOllamaModels(payload.models ?? []);
+      setModelStatus(payload.message || 'Ollama is available.');
+    } catch (error) {
+      setOllamaModels([]);
+      setModelStatus(error instanceof Error ? error.message : 'Ollama is unavailable.');
+    }
+  }
+
+  async function generateAIReview() {
+    setAiLoading(true);
+    try {
+      const response = await fetch('/api/ai/recommendations', { method: 'POST' });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Local portfolio review failed.');
+      setAiReview(payload as AIReview);
+      setNotice('Local portfolio review generated.');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Local portfolio review failed.');
+    } finally {
+      setAiLoading(false);
     }
   }
 
@@ -268,12 +421,12 @@ function App() {
     }
   }
 
-  useEffect(() => { void syncPortfolio(); }, []);
+  useEffect(() => { void syncPortfolio(false); }, []);
 
   const openSection = (section: Section) => {
     setActiveSection(section);
-    if (section !== 'Overview') setNotice(`${section} will be available after you import portfolio data.`);
-    else setNotice('');
+    setNotice('');
+    if (section === 'Settings' && !preferences) void loadPreferences();
   };
 
   return (
@@ -295,8 +448,8 @@ function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className="privacy-card"><span className="privacy-icon"><ShieldCheck size={17} /></span><div><strong>Your data stays yours</strong><p>Stored and processed on this device.</p></div></div>
-          <button className="nav-item muted-nav" aria-label="Settings" onClick={() => setNotice('Settings will be available in a future step.')}><Settings2 size={17} /><span>Settings</span></button>
-          <button className="nav-item muted-nav" aria-label="Help and guides" onClick={() => setNotice('Help: import a Kite holdings CSV to get started.')}><CircleHelp size={17} /><span>Help & guides</span></button>
+          <button className="nav-item muted-nav" aria-label="Settings" onClick={() => openSection('Settings')}><Settings2 size={17} /><span>Settings</span></button>
+          <button className="nav-item muted-nav" aria-label="Help and guides" onClick={() => openSection('Glossary')}><CircleHelp size={17} /><span>Help & guides</span></button>
           <div className="user-row"><div className="avatar" aria-hidden="true">P</div><div className="user-text"><strong>Personal portfolio</strong><span>Local workspace</span></div><ChevronDown size={16} aria-hidden="true" /></div>
         </div>
       </aside>
@@ -305,10 +458,42 @@ function App() {
         <header className="topbar">
           <button className="mobile-menu icon-button" aria-label="Open navigation" onClick={() => setNotice('Use the sidebar navigation to switch sections.')}><Menu size={19} /></button>
           <div className="breadcrumb"><span>Workspace</span><span className="slash">/</span><strong>{activeSection}</strong></div>
-          <div className="top-actions"><span className="local-pill"><span className={`status-dot ${apiHealth}`} />LOCAL MODE</span><button className="icon-button" aria-label="Open settings" onClick={() => setNotice('Settings will be available in a future step.')}><Settings2 size={18} /></button></div>
+          <div className="top-actions"><span className="local-pill"><span className={`status-dot ${apiHealth}`} />LOCAL MODE</span><button className="icon-button" aria-label="Open settings" onClick={() => openSection('Settings')}><Settings2 size={18} /></button></div>
         </header>
 
         <div className="content-wrap">
+          {activeSection === 'Settings' && <section className="settings-page">
+            <div className="welcome-row"><div><p className="overline">LOCAL PREFERENCES</p><h1>Make it <em>yours.</em></h1><p className="welcome-copy">Saved in this app’s SQLite database on your device.</p></div><Button onClick={() => void saveSettings()} disabled={!preferences || settingsSaving}>{settingsSaving ? 'Saving…' : 'Save preferences'}</Button></div>
+            {!preferences ? <div className="panel">Loading saved preferences…</div> : <>
+              <section className="panel settings-panel"><div className="panel-heading"><div><h2>Portfolio display & sync</h2><p className="section-subtitle">Choose what appears and which sources refresh.</p></div></div>
+                <label className="setting-row"><span><strong>Show manual imports</strong><small>Include CSV, manual, and sample rows in totals, holdings, and allocations.</small></span><input type="checkbox" checked={preferences.show_manual_imports} onChange={e => updatePreference('show_manual_imports', e.target.checked)} /></label>
+                <label className="setting-row"><span><strong>Sync Zerodha on app open</strong><small>Fetch the latest read-only holdings and SIP snapshot when the dashboard opens.</small></span><input type="checkbox" checked={preferences.auto_sync_zerodha} onChange={e => updatePreference('auto_sync_zerodha', e.target.checked)} /></label>
+              </section>
+              <section className="panel settings-panel"><div className="panel-heading"><div><h2>Local AI with Ollama</h2><p className="section-subtitle">Requests stay on your configured local or private Ollama host.</p></div><Button variant="outline" onClick={() => void discoverOllamaModels()}><Server size={15}/> Find installed models</Button></div>
+                <label className="setting-row"><span><strong>Enable AI portfolio review</strong><small>Generate evidence-linked summaries. Output is informational and not financial advice.</small></span><input type="checkbox" checked={preferences.ollama_enabled} onChange={e => updatePreference('ollama_enabled', e.target.checked)} /></label>
+                <div className="settings-fields"><label>Ollama endpoint<input list="ollama-endpoints" value={preferences.ollama_endpoint} onChange={e => updatePreference('ollama_endpoint', e.target.value)} placeholder="http://127.0.0.1:11434"/><datalist id="ollama-endpoints">{ollamaEndpoints.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</datalist><small>{ollamaEndpoints.map(item => item.label + ': ' + item.value).join(' · ')}</small></label>
+                  <label>Model<input list="ollama-models" value={preferences.ollama_model} onChange={e => updatePreference('ollama_model', e.target.value)} placeholder="gemma4:e2b"/><datalist id="ollama-models">{[...modelPresets.map(item => item.name), ...ollamaModels.map(item => item.name)].map(name => <option key={name} value={name}/>)}</datalist><small>{modelPresets.map(item => `${item.name} — ${item.description}`).join(' · ')}</small></label></div>
+                {modelStatus && <p className="inline-status" role="status">{modelStatus}{ollamaModels.length > 0 && ` · ${ollamaModels.length} model(s) installed`}</p>}
+              </section>
+              <section className="panel settings-panel"><div className="panel-heading"><div><h2>Yahoo Finance price sync</h2><p className="section-subtitle">Uses yfinance for daily equity closes. Yahoo access is subject to Yahoo’s terms.</p></div></div>
+                <label className="setting-row"><span><strong>Allow manual Yahoo price refresh</strong><small>Updates prices for Zerodha equity holdings when you press Sync prices.</small></span><input type="checkbox" checked={preferences.yfinance_sync_enabled} onChange={e => updatePreference('yfinance_sync_enabled', e.target.checked)} /></label>
+                <label className="setting-row"><span><strong>I have permission to retrieve Yahoo Finance data this way</strong><small>Automated collection may require prior permission. See <a href="https://legal.yahoo.com/us/en/yahoo/terms/otos/index.html?ncid=mbr_idnedulnk00000001" target="_blank" rel="noreferrer">Yahoo terms</a>.</small></span><input type="checkbox" checked={preferences.yahoo_terms_confirmed} onChange={e => updatePreference('yahoo_terms_confirmed', e.target.checked)} /></label>
+                <label className="setting-row"><span><strong>Refresh Yahoo prices on app open</strong><small>Runs only when price sync is enabled and the permission confirmation is saved.</small></span><input type="checkbox" checked={preferences.auto_sync_yfinance} onChange={e => updatePreference('auto_sync_yfinance', e.target.checked)} /></label>
+              </section>
+            </>}
+          </section>}
+
+          {activeSection === 'Glossary' && <section><div className="welcome-row"><div><p className="overline">PLAIN LANGUAGE</p><h1>Portfolio <em>glossary.</em></h1><p className="welcome-copy">Short definitions for the numbers and terms in this dashboard.</p></div></div><label className="glossary-search"><Search size={17}/><input aria-label="Search glossary" placeholder="Search terms" value={glossarySearch} onChange={e => setGlossarySearch(e.target.value)}/></label><div className="glossary-grid">{filteredGlossary.map(item => <article className="panel glossary-card" key={item.term}><h2>{item.term}</h2><p>{item.definition}</p></article>)}</div></section>}
+
+          {activeSection === 'AI insights' && <section><div className="welcome-row"><div><p className="overline">PRIVATE · LOCAL MODEL</p><h1>Understand your <em>portfolio.</em></h1><p className="welcome-copy">Ask your configured Ollama model to summarize concentration and data quality using saved holdings.</p></div><Button variant="ai" onClick={() => void generateAIReview()} disabled={aiLoading || !preferences?.ollama_enabled}>{aiLoading ? 'Reviewing…' : 'Generate review'}</Button></div>
+            {!preferences?.ollama_enabled && <div className="panel"><h2>Enable local AI in Settings</h2><p>Choose a local Ollama endpoint and installed model, then enable AI portfolio review.</p><Button variant="outline" onClick={() => openSection('Settings')}>Open settings</Button></div>}
+            {aiReview && <><div className="panel ai-summary"><h2>Summary · {aiReview.model}</h2><p>{aiReview.summary}</p><small>Generated {formatDate(aiReview.generated_at)} · {aiReview.scope}</small></div><div className="ai-insight-grid">{aiReview.insights.map((item, index) => <article className="panel" key={`${item.title}-${index}`}><span className="status-pill">{item.type}</span><h2>{item.title}</h2><p>{item.detail}</p><small>Portfolio evidence: {item.evidence}</small></article>)}</div></>}
+            <p className="ai-disclaimer">Informational only. The model does not forecast returns or provide buy, sell, or trade instructions.</p>
+          </section>}
+
+          {activeSection === 'Activity' && <section><div className="welcome-row"><div><p className="overline">DATA FRESHNESS</p><h1>Recent <em>activity.</em></h1><p className="welcome-copy">Review connections, refresh attempts, and the age of your saved snapshots.</p></div><Button variant="outline" onClick={() => void syncPortfolio()} disabled={refreshing}><RefreshCw size={15}/> Sync Zerodha</Button></div><div className="panel activity-list">{sources.length === 0 ? <p>No source activity has been recorded yet.</p> : sources.map(source => <article className="activity-item" key={source.source}><span className={`status-pill ${source.state}`}>{source.state}</span><div><h2>{source.source}</h2><p>{source.status_message || source.last_error || 'No status detail available.'}</p><small>Last success: {formatDate(source.last_successful_refresh)} · Last attempt: {formatDate(source.last_attempted_refresh)} · Data date: {formatDate(source.as_of)}</small></div></article>)}</div></section>}
+
+          {(activeSection === 'Overview' || activeSection === 'Holdings') && <>
           <section className="welcome-row">
             <div><p className="overline">{today}</p><h1>Your portfolio, <em>in focus.</em></h1><p className="welcome-copy">A calm place to understand what you own and how it’s doing.</p></div>
             <div className="welcome-actions">
@@ -363,8 +548,8 @@ function App() {
               <div className="insight-top"><span className="ai-mark"><Bot size={18} /></span><span className="ai-local">PRIVATE · LOCAL AI</span></div>
               <h2 id="insight-heading">A little perspective.</h2>
               <p>Ask your local Gemma model to explain your allocation, spot concentration, or summarize recent changes.</p>
-              <div className="model-status"><span className="model-dot" /><span>Model not connected</span><button className="text-button" onClick={() => setNotice('Configure LLM_BASE_URL and LLM_MODEL in your local .env file to connect Gemma.')}>Configure <ArrowUpRight size={13} /></button></div>
-              <Button variant="ai" onClick={() => setNotice('Import holdings and connect a local model to start an insight session.')} disabled><Bot size={16} /> Explore insights</Button>
+              <div className="model-status"><span className={`model-dot ${preferences?.ollama_enabled ? 'connected' : ''}`} /><span>{preferences?.ollama_enabled ? preferences.ollama_model : 'Model not enabled'}</span><button className="text-button" onClick={() => openSection('Settings')}>Configure <ArrowUpRight size={13} /></button></div>
+              <Button variant="ai" onClick={() => openSection('AI insights')}><Bot size={16} /> Explore insights</Button>
               <span className="ai-disclaimer">Informational only. Never a trade instruction.</span>
             </section>
           </div>
@@ -379,7 +564,7 @@ function App() {
                 <tbody>
                   {holdings.length === 0 ? (
                     <tr><td colSpan={6}><div className="table-empty"><span className="empty-icon"><WalletCards size={19} /></span><span><strong>Your holdings will appear here</strong><small>Import a statement or connect an account to begin.</small></span><ArrowDownLeft className="empty-arrow" size={17} aria-hidden="true" /></div></td></tr>
-                  ) : holdings.map((holding) => (
+                  ) : displayHoldings.map((holding) => (
                     <tr key={holding.id}>
                       <td>{holding.instrument_name}</td>
                       <td>{holding.asset_class === 'mutual_fund' ? 'Mutual fund' : holding.asset_class === 'equity_position' ? 'Equity position' : holding.asset_class === 'derivative_position' ? 'Derivative' : holding.asset_class}</td>
@@ -387,6 +572,7 @@ function App() {
                       <td title={`Price date: ${formatDate(holding.price_as_of)}`}>
                         {formatCurrency(holding.last_price)}
                         <small className="table-price-date">{formatDate(holding.price_as_of)}</small>
+                        <small className="table-price-date">{holding.price_source ?? holding.source}</small>
                       </td>
                       <td>{formatCurrency(holding.value)}</td>
                       <td>{formatCurrency(holding.pnl)}</td>
@@ -429,6 +615,8 @@ function App() {
               </div>
             </section>
           )}
+          {activeSection === 'Holdings' && <section className="panel price-sync-panel"><div><h2>Daily market price update</h2><p className="section-subtitle">Yahoo Finance data via yfinance · refreshes Zerodha equity symbols only.</p></div><Button variant="outline" disabled={refreshing || !preferences?.yfinance_sync_enabled || !preferences?.yahoo_terms_confirmed} onClick={() => void syncMarketData()}><RefreshCw size={15}/>{refreshing ? 'Refreshing…' : 'Sync prices'}</Button></section>}
+          </>}
 
           <footer className="page-footer"><span>Made for clarity, built for privacy.</span><span><ShieldCheck size={14} /> Your data never leaves this device</span></footer>
         </div>

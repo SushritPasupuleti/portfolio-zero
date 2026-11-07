@@ -42,6 +42,7 @@ class Holding(BaseModel):
     value: float | None = None
     pnl: float | None = None
     price_as_of: datetime | None = None
+    price_source: str | None = None
     currency: str = "INR"
     source: str = "manual-import"
     as_of: datetime | None = None
@@ -103,3 +104,14 @@ class ImportCommitResult(BaseModel):
     status: Literal["success", "failed"]
     rows_committed: int
     warnings: list[str] = Field(default_factory=list)
+
+
+class Preferences(BaseModel):
+    show_manual_imports: bool = True
+    auto_sync_zerodha: bool = True
+    ollama_enabled: bool = False
+    ollama_endpoint: str = "http://127.0.0.1:11434"
+    ollama_model: str = "gemma4:e2b"
+    yfinance_sync_enabled: bool = False
+    yahoo_terms_confirmed: bool = False
+    auto_sync_yfinance: bool = False

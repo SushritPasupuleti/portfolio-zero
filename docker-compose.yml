@@ -1,0 +1,16 @@
+services:
+  api:
+    build: ./backend
+    environment:
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://host.docker.internal:11434}
+      - LLM_MODEL=${LLM_MODEL:-gemma3:1b}
+    ports:
+      - "127.0.0.1:8000:8000"
+  web:
+    build: ./frontend
+    environment:
+      API_PROXY_TARGET: http://api:8000
+    ports:
+      - "127.0.0.1:5173:5173"
+    depends_on:
+      - api

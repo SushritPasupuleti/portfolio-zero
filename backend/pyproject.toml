@@ -1,0 +1,32 @@
+[project]
+name = "portfolio-puffin-api"
+version = "0.1.0"
+description = "Local-first, read-only investment dashboard API"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "fastapi>=0.115,<1",
+    "httpx>=0.27,<1",
+    "kiteconnect>=5.0,<6",
+    "pydantic-settings>=2.6,<3",
+    "streamlit>=1.40,<2",
+    "uvicorn[standard]>=0.30,<1",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8,<1",
+    "pytest>=8.3,<9",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

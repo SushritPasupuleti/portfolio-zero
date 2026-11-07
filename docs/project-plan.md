@@ -21,6 +21,7 @@ Optional local Gemma analysis may summarize allocation, concentration, and chang
 - **No invented numbers:** Missing, stale, partial, or mismatched values appear as unavailable or needing review, never silently as zero.
 - **Traceable figures:** Each number carries its source, as-of time/date, currency, and price type. Cost-basis and return assumptions are visible.
 - **Read-only by construction:** Do not implement any order, SIP mutation, authorization, or other account-write UI/API call. Do not call SDK write methods.
+- **Manual SIP schedules are local records only:** A locally generated installment is a scheduled portfolio-ledger entry, not a Zerodha SIP instruction or proof that a payment executed. Zerodha remains the source of its own granular SIP records.
 - **Local by default:** Web and API ports bind to loopback. Broker data goes only to Zerodha; EOD/NAV requests go only to configured sources; model requests go only to a local inference server.
 - **Accessible by design:** Keyboard access, visible focus, semantic structure, non-color status cues, responsive layout, and assistive-technology labels are release requirements.
 - **Useful without AI:** Gemma is optional. The dashboard and account connection must work when no local model is installed or running.
@@ -132,6 +133,8 @@ FastAPI (127.0.0.1:8000)
 - **Position:** instrument, quantity, product, average price, realized/unrealized fields, and account snapshot; read-only display.
 - **Fund holding:** fund ISIN, name, units, average cost, NAV, NAV date, folio only if needed, source, and snapshot.
 - **SIP:** fund ISIN/name, status, amount, frequency, next installment and data source/time.
+- **Manual SIP schedule:** fund/instrument, source, installment amount, frequency/trigger rule, start/end dates, timezone, active/paused state, and next trigger. This is separate from the broker SIP snapshot.
+- **Manual SIP entry:** schedule reference, deterministic trigger-interval key, effective date, amount, status (`scheduled/unconfirmed`, user-confirmed, or skipped), and creation time. It records a planned contribution and must not be counted as an executed cash flow until confirmed.
 - **Price observation:** instrument, raw OHLCV close, provider, exchange session date, currency, adjusted/raw flag, retrieval time, and validation status.
 - **Portfolio snapshot:** timestamped totals/allocation derived from positions and price observations, with calculation version and completeness status.
 - **Transaction/import row:** optional later; source reference, effective date, quantity/cash flow, validation result, and reconciliation status.
@@ -224,6 +227,14 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 - [x] Import and export the manual ledger as CSV with required-column checks, row validation, a file-size limit, and append or all-valid replace mode.
 - [x] Edit manual positions inline in a grid and bulk change market, source, or asset type; bulk delete selected rows.
 - [x] Keep manual editor rows in a separate SQLite table from broker snapshots while including them in analysis under the manual visibility preference.
+- [x] Add a separate manual SIP schedule editor for manually held funds, with configurable amount, start/end dates, active/paused state, timezone, and monthly/weekly trigger rules (monthly days 1–31; day 29–31 clamps to month end).
+- [x] Add a local manual SIP installment ledger, distinct from both `manual_positions` and Zerodha's SIP snapshot. A generated due installment is visibly `scheduled/unconfirmed`; it is not represented as an executed payment until the user confirms it.
+- [x] On application load, evaluate each active manual schedule and create the entry for its immediately previous trigger interval only when absent. Do not generate broker SIP entries or call any Kite mutation endpoint. Future, paused, and ended intervals are skipped.
+- [x] Make generation idempotent under repeated loads and concurrent requests with a stable `schedule_id + interval_key` unique constraint and an atomic SQLite insert-on-conflict transaction. Store the schedule timezone (default `Asia/Kolkata`) and calculate interval keys in that timezone to avoid date-boundary duplicates.
+- [x] Show each schedule's next trigger and generated/confirmed entry history. Let users edit/pause schedules and mark or skip local entries without changing Zerodha state.
+- [x] Define missed-interval behavior explicitly: process at most the immediately previous trigger interval per load; do not silently backfill a sequence of older installments.
+- [ ] Expose a review state for older missed intervals if required.
+- [ ] Provide separate CSV import/export for manual SIP schedules and entries, with preview, validation, and duplicate detection; do not overload the position CSV schema.
 - [ ] Add file parser preview for broker statements with schema detection, duplicate reconciliation, and source-date checks.
 - [ ] Preserve the last good snapshot unless the user reviews and commits a valid replacement/import.
 - [ ] Reconcile imports against current Personal holdings; show unmatched, duplicated, missing, and conflicting rows without silently merging.
@@ -231,6 +242,8 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 - [ ] Add export and encrypted backup/restore flows plus data-deletion confirmation.
 
 **Exit criteria:** A malformed or partial file cannot wipe account data; a successful import has a reviewable result and provenance; historical performance is labeled complete only when the needed transactions and ownership history reconcile.
+
+**Manual SIP implementation acceptance:** Repeated app loads create no duplicate interval entry; a due active schedule creates exactly one local `scheduled/unconfirmed` entry for the previous trigger interval; paused, ended, and future schedules create none; generated entries remain separate from Zerodha rows and are excluded from executed cash-flow/performance calculations until confirmed. Automated tests for month-end, timezone boundaries, retries, and concurrent insert attempts remain planned.
 
 ### Phase 6 — Local Gemma insights
 

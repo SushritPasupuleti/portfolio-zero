@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import calendar
 import json
 import os
 import sqlite3
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .models import (
     AllocationBucket,
     Holding,
     ManualPositionInput,
+    ManualSipScheduleInput,
     PortfolioSummary,
     Preferences,
     Sip,
@@ -238,6 +241,43 @@ def initialize_db() -> None:
                 as_of TEXT NOT NULL
             )
             """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS manual_sip_schedules (
+                id TEXT PRIMARY KEY,
+                scheme_name TEXT NOT NULL,
+                source TEXT NOT NULL,
+                amount REAL NOT NULL CHECK(amount > 0),
+                frequency TEXT NOT NULL CHECK(frequency IN ('monthly', 'weekly')),
+                trigger_day INTEGER NOT NULL,
+                start_date TEXT NOT NULL,
+                end_date TEXT,
+                timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
+                enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS manual_sip_entries (
+                id TEXT PRIMARY KEY,
+                schedule_id TEXT NOT NULL REFERENCES manual_sip_schedules(id) ON DELETE CASCADE,
+                interval_key TEXT NOT NULL,
+                effective_date TEXT NOT NULL,
+                amount REAL NOT NULL,
+                status TEXT NOT NULL DEFAULT 'scheduled/unconfirmed'
+                    CHECK(status IN ('scheduled/unconfirmed', 'confirmed', 'skipped')),
+                created_at TEXT NOT NULL,
+                UNIQUE(schedule_id, interval_key)
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_manual_sip_entries_schedule_date "
+            "ON manual_sip_entries(schedule_id, effective_date DESC)"
         )
         connection.execute(
             """
@@ -813,6 +853,164 @@ def get_sips(include_manual: bool = True) -> list[Sip]:
     return [sip for sip in sips if include_manual or not _is_manual_source(sip.source)]
 
 
+def _previous_manual_sip_trigger(schedule: sqlite3.Row, today: date) -> tuple[str, date] | None:
+    frequency = schedule["frequency"]
+    trigger_day = int(schedule["trigger_day"])
+    if frequency == "monthly":
+        year, month = today.year, today.month
+        trigger = date(year, month, min(trigger_day, calendar.monthrange(year, month)[1]))
+        if trigger > today:
+            month -= 1
+            if month == 0:
+                year -= 1
+                month = 12
+            trigger = date(year, month, min(trigger_day, calendar.monthrange(year, month)[1]))
+        interval_key = trigger.strftime("%Y-%m")
+    else:
+        trigger = today - timedelta(days=(today.weekday() - trigger_day) % 7)
+        iso = trigger.isocalendar()
+        interval_key = f"{iso.year}-W{iso.week:02d}"
+
+    start_date = date.fromisoformat(schedule["start_date"])
+    end_date = date.fromisoformat(schedule["end_date"]) if schedule["end_date"] else None
+    if trigger < start_date or (end_date and trigger > end_date):
+        return None
+    return interval_key, trigger
+
+
+def _next_manual_sip_trigger(schedule: sqlite3.Row, today: date) -> date | None:
+    start_date = date.fromisoformat(schedule["start_date"])
+    end_date = date.fromisoformat(schedule["end_date"]) if schedule["end_date"] else None
+    earliest = max(today, start_date)
+    if schedule["frequency"] == "weekly":
+        offset = (int(schedule["trigger_day"]) - earliest.weekday()) % 7
+        candidate = earliest + timedelta(days=offset)
+    else:
+        year, month = earliest.year, earliest.month
+        for _ in range(1200):
+            month_end = calendar.monthrange(year, month)[1]
+            candidate = date(year, month, min(int(schedule["trigger_day"]), month_end))
+            if candidate >= earliest:
+                break
+            month += 1
+            if month == 13:
+                year += 1
+                month = 1
+    if end_date and candidate > end_date:
+        return None
+    return candidate
+
+
+def refresh_manual_sip_entries(now: datetime | None = None) -> int:
+    """Create the latest due local manual installment once per schedule interval."""
+    inserted = 0
+    with get_connection() as connection:
+        schedules = connection.execute(
+            "SELECT * FROM manual_sip_schedules WHERE enabled = 1"
+        ).fetchall()
+        for schedule in schedules:
+            local_now = (now or datetime.now(UTC)).astimezone(ZoneInfo(schedule["timezone"]))
+            occurrence = _previous_manual_sip_trigger(schedule, local_now.date())
+            if occurrence is None:
+                continue
+            interval_key, trigger_date = occurrence
+            cursor = connection.execute(
+                """INSERT INTO manual_sip_entries
+                   (id, schedule_id, interval_key, effective_date, amount, status, created_at)
+                   VALUES (?, ?, ?, ?, ?, 'scheduled/unconfirmed', ?)
+                   ON CONFLICT(schedule_id, interval_key) DO NOTHING""",
+                (
+                    str(uuid.uuid4()), schedule["id"], interval_key,
+                    trigger_date.isoformat(), schedule["amount"],
+                    _utc_iso(now or datetime.now(UTC)),
+                ),
+            )
+            inserted += cursor.rowcount
+    return inserted
+
+
+def list_manual_sip_schedules() -> list[dict[str, object]]:
+    with get_connection() as connection:
+        schedules = connection.execute(
+            "SELECT * FROM manual_sip_schedules ORDER BY enabled DESC, scheme_name COLLATE NOCASE"
+        ).fetchall()
+        result: list[dict[str, object]] = []
+        for schedule in schedules:
+            item = dict(schedule)
+            item["enabled"] = bool(item["enabled"])
+            today = datetime.now(ZoneInfo(schedule["timezone"])).date()
+            next_trigger = _next_manual_sip_trigger(schedule, today)
+            item["next_trigger_date"] = next_trigger.isoformat() if next_trigger else None
+            item["entries"] = [
+                dict(row)
+                for row in connection.execute(
+                    """SELECT id, schedule_id, interval_key, effective_date, amount,
+                              status, created_at
+                       FROM manual_sip_entries WHERE schedule_id = ?
+                       ORDER BY effective_date DESC, created_at DESC""",
+                    (schedule["id"],),
+                ).fetchall()
+            ]
+            result.append(item)
+    return result
+
+
+def save_manual_sip_schedule(
+    payload: ManualSipScheduleInput, schedule_id: str | None = None
+) -> str:
+    now = _utc_iso(datetime.now(UTC))
+    creating = schedule_id is None
+    schedule_id = schedule_id or str(uuid.uuid4())
+    values = payload.model_dump(mode="json")
+    with get_connection() as connection:
+        if not creating and connection.execute(
+            "SELECT 1 FROM manual_sip_schedules WHERE id = ?", (schedule_id,)
+        ).fetchone():
+            connection.execute(
+                """UPDATE manual_sip_schedules SET scheme_name=?, source=?, amount=?, frequency=?,
+                   trigger_day=?, start_date=?, end_date=?, timezone=?, enabled=?, updated_at=?
+                   WHERE id=?""",
+                (
+                    values["scheme_name"], values["source"], values["amount"],
+                    values["frequency"], values["trigger_day"], values["start_date"],
+                    values["end_date"], values["timezone"], int(values["enabled"]),
+                    now, schedule_id,
+                ),
+            )
+        elif not creating:
+            raise KeyError(schedule_id)
+        else:
+            connection.execute(
+                """INSERT INTO manual_sip_schedules
+                   (id, scheme_name, source, amount, frequency, trigger_day, start_date,
+                    end_date, timezone, enabled, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    schedule_id, values["scheme_name"], values["source"], values["amount"],
+                    values["frequency"], values["trigger_day"], values["start_date"],
+                    values["end_date"], values["timezone"], int(values["enabled"]), now, now,
+                ),
+            )
+    return schedule_id
+
+
+def set_manual_sip_enabled(schedule_id: str, enabled: bool) -> bool:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            "UPDATE manual_sip_schedules SET enabled=?, updated_at=? WHERE id=?",
+            (int(enabled), _utc_iso(datetime.now(UTC)), schedule_id),
+        )
+    return cursor.rowcount > 0
+
+
+def set_manual_sip_entry_status(entry_id: str, status: str) -> bool:
+    with get_connection() as connection:
+        cursor = connection.execute(
+            "UPDATE manual_sip_entries SET status=? WHERE id=?", (status, entry_id)
+        )
+    return cursor.rowcount > 0
+
+
 def calculate_summary(include_manual: bool = True) -> PortfolioSummary:
     rows = get_holdings(include_manual=include_manual)
     if not rows:
@@ -1164,6 +1362,8 @@ def update_market_prices(prices: dict[str, dict[str, object]], source: str) -> i
 
 def clear_local_data() -> None:
     with get_connection() as connection:
+        connection.execute("DELETE FROM manual_sip_entries")
+        connection.execute("DELETE FROM manual_sip_schedules")
         connection.execute("DELETE FROM holdings")
         connection.execute("DELETE FROM sips")
         connection.execute("DELETE FROM sources")

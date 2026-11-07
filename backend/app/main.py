@@ -22,6 +22,8 @@ from .models import (
     ManualPositionIds,
     ManualPositionImport,
     ManualPositionInput,
+    ManualSipEntryStatus,
+    ManualSipScheduleInput,
     Preferences,
 )
 from .ollama_adapter import (
@@ -50,12 +52,17 @@ from .storage import (
     insert_import_record,
     list_ai_reports,
     list_manual_positions,
+    list_manual_sip_schedules,
     persist_holdings,
     persist_sips,
+    refresh_manual_sip_entries,
     save_ai_report,
     save_manual_positions,
+    save_manual_sip_schedule,
     save_preferences,
     save_zerodha_token,
+    set_manual_sip_enabled,
+    set_manual_sip_entry_status,
     upsert_source_status,
 )
 from .yahoo_news_adapter import NEWS_SOURCE_TYPE, sync_portfolio_news
@@ -155,6 +162,7 @@ def _run_metadata_markdown(metadata: dict[str, object]) -> str:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     initialize_db()
+    refresh_manual_sip_entries()
     yield
 
 
@@ -703,6 +711,7 @@ def delete_local_data() -> dict[str, bool | str]:
 
 @app.get("/api/portfolio/sips")
 def portfolio_sips() -> dict[str, list[dict]]:
+    refresh_manual_sip_entries()
     preferences = get_preferences()
     return {
         "items": [
@@ -710,6 +719,49 @@ def portfolio_sips() -> dict[str, list[dict]]:
             for sip in get_sips(include_manual=preferences.show_manual_imports)
         ]
     }
+
+
+@app.get("/api/manual-sips")
+def manual_sips() -> dict[str, list[dict[str, object]]]:
+    refresh_manual_sip_entries()
+    return {"items": list_manual_sip_schedules()}
+
+
+@app.post("/api/manual-sips")
+def create_manual_sip(payload: ManualSipScheduleInput) -> dict[str, object]:
+    schedule_id = save_manual_sip_schedule(payload)
+    refresh_manual_sip_entries()
+    return {"id": schedule_id, "items": list_manual_sip_schedules()}
+
+
+@app.put("/api/manual-sips/{schedule_id}")
+def update_manual_sip(
+    schedule_id: str, payload: ManualSipScheduleInput
+) -> dict[str, object]:
+    try:
+        save_manual_sip_schedule(payload, schedule_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Manual SIP schedule not found.") from exc
+    refresh_manual_sip_entries()
+    return {"items": list_manual_sip_schedules()}
+
+
+@app.patch("/api/manual-sips/{schedule_id}/enabled")
+def toggle_manual_sip(schedule_id: str, payload: dict[str, bool]) -> dict[str, object]:
+    if "enabled" not in payload:
+        raise HTTPException(status_code=422, detail="enabled is required.")
+    if not set_manual_sip_enabled(schedule_id, payload["enabled"]):
+        raise HTTPException(status_code=404, detail="Manual SIP schedule not found.")
+    return {"items": list_manual_sip_schedules()}
+
+
+@app.patch("/api/manual-sips/entries/{entry_id}")
+def update_manual_sip_entry(
+    entry_id: str, payload: ManualSipEntryStatus
+) -> dict[str, bool]:
+    if not set_manual_sip_entry_status(entry_id, payload.status):
+        raise HTTPException(status_code=404, detail="Manual SIP entry not found.")
+    return {"saved": True}
 
 
 @app.get("/api/manual-portfolio")

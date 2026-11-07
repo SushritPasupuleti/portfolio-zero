@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -155,3 +155,56 @@ class ManualPositionIds(BaseModel):
 class ManualPositionImport(BaseModel):
     csv_text: str = Field(max_length=5_000_000)
     replace_existing: bool = False
+
+
+class ManualSipScheduleInput(BaseModel):
+    scheme_name: str = Field(min_length=1, max_length=160)
+    source: str = Field(min_length=1, max_length=120)
+    amount: float = Field(gt=0)
+    frequency: Literal["monthly", "weekly"] = "monthly"
+    trigger_day: int = Field(ge=0, le=31)
+    start_date: date
+    end_date: date | None = None
+    timezone: str = Field(default="Asia/Kolkata", min_length=1, max_length=80)
+    enabled: bool = True
+
+    @field_validator("scheme_name", "source", "timezone")
+    @classmethod
+    def strip_schedule_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field cannot be blank.")
+        return value
+
+    @field_validator("trigger_day")
+    @classmethod
+    def validate_trigger_day(cls, value: int, info):
+        frequency = info.data.get("frequency", "monthly")
+        if frequency == "weekly" and value > 6:
+            raise ValueError("Weekly trigger day must be 0 (Monday) through 6 (Sunday).")
+        if frequency == "monthly" and value < 1:
+            raise ValueError("Monthly trigger day must be 1 through 31.")
+        return value
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError("Choose a valid IANA timezone.") from exc
+        return value
+
+    @field_validator("end_date")
+    @classmethod
+    def validate_schedule_dates(cls, value: date | None, info):
+        start_date = info.data.get("start_date")
+        if value is not None and start_date is not None and value < start_date:
+            raise ValueError("End date must be on or after start date.")
+        return value
+
+
+class ManualSipEntryStatus(BaseModel):
+    status: Literal["scheduled/unconfirmed", "confirmed", "skipped"]

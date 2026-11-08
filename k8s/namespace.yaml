@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: portfolio-puffin
+  labels:
+    app.kubernetes.io/name: portfolio-puffin
+    app.kubernetes.io/part-of: portfolio-puffin

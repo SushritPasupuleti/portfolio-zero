@@ -1,0 +1,26 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: portfolio-puffin
+  namespace: portfolio-puffin
+  annotations:
+    kubernetes.io/ingress.class: traefik
+spec:
+  rules:
+    - host: portfolio.home.arpa
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: portfolio-puffin-api
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: portfolio-puffin-web
+                port:
+                  number: 80

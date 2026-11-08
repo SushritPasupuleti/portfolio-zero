@@ -34,6 +34,20 @@ make dev
 
 Open <http://localhost:5173>. FastAPI is available at <http://localhost:8000>. Stop the stack with `Ctrl+C` or `make docker-down`.
 
+## Run on a k3s homelab
+
+For a private homelab or lab cluster, build images, push them to your registry, and apply the Kubernetes manifests in `k8s/`:
+
+```sh
+make k3s-build
+make k3s-push
+make k3s-apply
+```
+
+Then point a DNS name such as `portfolio.home.arpa` or `portfolio.local` to the k3s ingress node and access the app there. The manifests use a persistent volume for the API data directory and route `/api/*` requests to the FastAPI service behind the UI.
+
+See [docs/homelab-k3s.md](docs/homelab-k3s.md) for the full cluster setup, secret and registry flow, and local DNS notes.
+
 ## Run natively
 
 Install the Python and frontend dependencies once:

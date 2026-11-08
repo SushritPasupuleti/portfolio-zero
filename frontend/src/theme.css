@@ -265,3 +265,30 @@ html[data-theme] .status-pill.connected { border-color: var(--ctp-surface2); }
 @media (prefers-reduced-motion: no-preference) {
   html[data-theme] body { transition: background-color 140ms ease, color 140ms ease; }
 }
+
+/* Shared shadcn semantic tokens used by every page and primitive. */
+html[data-theme] {
+  --background: var(--ctp-base);
+  --foreground: var(--ctp-text);
+  --card: var(--ctp-mantle);
+  --card-foreground: var(--ctp-text);
+  --popover: var(--ctp-mantle);
+  --popover-foreground: var(--ctp-text);
+  --primary: var(--ctp-green);
+  --primary-foreground: var(--ctp-base);
+  --secondary: var(--ctp-surface0);
+  --secondary-foreground: var(--ctp-text);
+  --muted: var(--ctp-surface0);
+  --muted-foreground: var(--ctp-subtext1);
+  --accent: var(--ctp-surface0);
+  --accent-foreground: var(--ctp-text);
+  --destructive: var(--ctp-red);
+  --border: var(--ctp-surface1);
+  --input: var(--ctp-surface2);
+  --ring: var(--ctp-blue);
+}
+html[data-theme] :is(.sidebar,.topbar,.panel,.metric-card,.settings-panel,.ui-dialog,.ui-input,.ui-select,.data-table-filter,.report-archive-item,.saved-runs-disclosure){border-color:var(--border)}
+html[data-theme] :is(.sidebar,.topbar,.panel,.metric-card,.settings-panel,.report-archive-item){color:var(--card-foreground)}
+html[data-theme] :is(.section-subtitle,.welcome-copy,.metric-foot,.table-detail-cell small,.report-archive-copy span,.report-archive-copy small){color:var(--muted-foreground)}
+html[data-theme] :is(.ui-input,.ui-select,.data-table-filter){background:var(--background);color:var(--foreground)}
+html[data-theme] :is(.panel,.metric-card,.settings-panel,.ui-dialog,.report-archive-item){border-radius:var(--radius,12px)}

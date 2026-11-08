@@ -4,14 +4,15 @@ import { createBrowserRouter, Navigate, RouterProvider, useBlocker, useLocation,
 import {
   Activity, ArrowUpRight, BookOpen, Bot, BriefcaseBusiness,
   ChartNoAxesCombined, Check, CircleHelp, Copy, Download, Grid2X2,
-  ExternalLink, Landmark, LayoutDashboard, Menu, Newspaper, Palette, Plus, RefreshCw, Search, Server, Settings2, Type,
-  ShieldCheck, Trash2, Upload, WalletCards, X,
+  ExternalLink, Eye, EyeOff, Landmark, LayoutDashboard, Menu, Newspaper, Palette, Plus, RefreshCw, Search, Server, Settings2, Type,
+  Trash2, Upload, WalletCards,
 } from 'lucide-react';
 import { Button } from './components/ui/button';
 import { Badge } from './components/ui/badge';
 import { Alert, AlertDescription, AlertTitle } from './components/ui/alert';
 import { AlertDialog } from './components/ui/alert-dialog';
 import { Card } from './components/ui/card';
+import { Checkbox } from './components/ui/checkbox';
 import { Collapsible } from './components/ui/collapsible';
 import { DataTable, type DataTableColumn } from './components/ui/data-table';
 import { Dialog } from './components/ui/dialog';
@@ -276,7 +277,7 @@ function App() {
   const navigate = useNavigate();
   const [apiHealth, setApiHealth] = useState<Health>('checking');
   const activeSection = sectionFromPath(location.pathname);
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(() => window.matchMedia('(min-width: 761px)').matches);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const confirmationResolver = useRef<((confirmed: boolean) => void) | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -319,6 +320,9 @@ function App() {
   const [reportExpanded, setReportExpanded] = useState(true);
   const [aiTab, setAiTab] = useState<AISectionTab>('portfolio');
   const [fontScale, setFontScale] = useState<'normal' | 'large'>(() => localStorage.getItem('portfolio-font-scale') === 'large' ? 'large' : 'normal');
+  const [privacyMode, setPrivacyMode] = useState(() => localStorage.getItem('portfolio-privacy-mode') === 'on');
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [commandQuery, setCommandQuery] = useState('');
   const [glossarySearch, setGlossarySearch] = useState('');
   const [manualPositions, setManualPositions] = useState<ManualPosition[]>([]);
   const [selectedManualIds, setSelectedManualIds] = useState<string[]>([]);
@@ -396,12 +400,15 @@ function App() {
 
   const formatCurrency = (value: number | null, currency = 'INR') => {
     if (value == null) return '—';
+    if (privacyMode) return '••••••';
     return new Intl.NumberFormat('en-IN', {
       style: 'currency',
       currency,
       maximumFractionDigits: currency === 'INR' ? 0 : 2,
     }).format(value);
   };
+
+  const formatPercent = (value: number, digits = 1) => privacyMode ? '•••' : `${value.toFixed(digits)}%`;
 
   const formatCompact = (value: number | null) => {
     if (value == null) return '—';
@@ -811,7 +818,7 @@ function App() {
       const response = await fetch('/api/token/credentials', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: kiteApiKey, api_secret: kiteApiSecret }) });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || 'Kite credentials could not be saved.');
-      addToast('Kite API key and secret saved locally.');
+      addToast('Kite API key and secret saved.');
       await createKiteLoginUrl();
     } catch (error) { setNotice(error instanceof Error ? error.message : 'Kite credentials could not be saved.'); }
   }
@@ -845,7 +852,7 @@ function App() {
       setPreferences(payload);
       return payload;
     } catch {
-      setNotice('Saved settings could not be loaded from the local API.');
+      setNotice('Saved settings could not be loaded.');
       return null;
     }
   }
@@ -905,7 +912,7 @@ function App() {
       else await Promise.all([loadSummary(), loadPortfolioData()]);
       setNotice(error instanceof Error
         ? error.message
-        : 'The local API or Zerodha could not be reached.');
+        : 'The API or Zerodha could not be reached.');
     } finally {
       setRefreshing(false);
       setInitialPortfolioLoading(false);
@@ -925,7 +932,7 @@ function App() {
       if (!response.ok) throw new Error(payload.detail || 'Settings could not be saved.');
       setPreferences(payload as Preferences);
       await Promise.all([loadSummary(), loadPortfolioData()]);
-      setNotice('Preferences saved to the local SQLite database.');
+      setNotice('Preferences saved.');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Settings could not be saved.');
     } finally {
@@ -934,7 +941,7 @@ function App() {
   }
 
   async function discoverOllamaModels() {
-    setModelStatus('Checking the saved local Ollama endpoint…');
+    setModelStatus('Checking Ollama connection…');
     try {
       const endpoint = preferences?.ollama_endpoint ?? '';
       const response = await fetch(`/api/ai/models?endpoint=${encodeURIComponent(endpoint)}`);
@@ -1070,6 +1077,20 @@ function App() {
     localStorage.setItem('portfolio-font-scale', fontScale);
   }, [fontScale]);
   useEffect(() => {
+    document.documentElement.dataset.privacyMode = privacyMode ? 'on' : 'off';
+    localStorage.setItem('portfolio-privacy-mode', privacyMode ? 'on' : 'off');
+  }, [privacyMode]);
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault(); setCommandQuery(''); setCommandOpen(true);
+      }
+      if (event.key === 'Escape') setCommandOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+  useEffect(() => {
     if (!preferences) void loadPreferences();
   }, []);
   useEffect(() => {
@@ -1109,19 +1130,31 @@ function App() {
   }, [navigationBlocker.state]);
 
   const openSection = (section: Section) => {
+    if (window.matchMedia('(max-width: 760px)').matches) setNavOpen(false);
     if (activeSection === section) return;
     navigate(sectionPaths[section]);
   };
 
+  const quickActions = [
+    ...navigation.map(({ label, icon }) => ({ label: `Go to ${label}`, keywords: label, icon, run: () => openSection(label) })),
+    { label: 'Sync Zerodha portfolio', keywords: 'refresh holdings account', icon: RefreshCw, run: () => void syncPortfolio() },
+    { label: 'Open manual portfolio', keywords: 'new position investment', icon: Plus, run: () => openSection('Manual portfolio') },
+    { label: 'Refresh market news', keywords: 'headlines news', icon: Newspaper, run: () => { openSection('AI insights'); setAiTab('news'); void syncPortfolioNews(); } },
+    { label: 'Hide or show portfolio values', keywords: 'privacy screen hide money', icon: privacyMode ? Eye : EyeOff, run: () => setPrivacyMode(value => !value) },
+  ];
+  const filteredQuickActions = quickActions.filter(action =>
+    `${action.label} ${action.keywords}`.toLowerCase().includes(commandQuery.trim().toLowerCase()),
+  );
+
   function renderReportArchive(type: ReportType) {
     return <section className="panel report-archive">
-      <div className="panel-heading"><div><h2>Saved runs</h2><p className="section-subtitle">{reportArchive.length} {reportArchive.length === 1 ? 'report' : 'reports'} · stored in local SQLite</p></div><Button variant="ghost" aria-label="Refresh saved reports" disabled={reportArchiveLoading} onClick={() => void loadReportArchive(type)}><RefreshCw size={14} className={reportArchiveLoading ? 'spin' : ''}/></Button></div>
-      {reportArchive.length === 0 ? <Empty title={reportArchiveLoading ? 'Loading saved reports' : 'No saved runs yet'} description={reportArchiveLoading ? 'Checking the local report archive…' : 'Your generated reports will appear here.'} /> : <div className="report-archive-list">{reportArchive.map(report => <article className={`report-archive-item ${selectedSavedReport?.report_id === report.report_id ? 'selected' : ''}`} key={report.report_id}><div className="report-archive-copy"><strong>{reportTypeLabel(report.report_type)}</strong><span>{formatDate(report.saved_at)} <i aria-hidden="true">·</i> {report.model}</span><small>{String(report.metadata?.portfolio_row_count ?? 0)} holdings <i aria-hidden="true">·</i> {String(report.metadata?.news_article_count ?? 0)} stories</small></div><Button variant="outline" onClick={() => void openSavedReport(report.report_id)} aria-label={`Open ${reportTypeLabel(report.report_type)} from ${formatDate(report.saved_at)}`}>{selectedSavedReport?.report_id === report.report_id ? 'Opened' : 'Open'}</Button></article>)}</div>}
+      <div className="panel-heading"><div><h2>Saved runs</h2><p className="section-subtitle">{reportArchive.length} {reportArchive.length === 1 ? 'report' : 'reports'}</p></div><Button variant="ghost" aria-label="Refresh saved reports" disabled={reportArchiveLoading} onClick={() => void loadReportArchive(type)}><RefreshCw size={14} className={reportArchiveLoading ? 'spin' : ''}/></Button></div>
+      {reportArchive.length === 0 ? <Empty title={reportArchiveLoading ? 'Loading saved reports' : 'No saved runs yet'} description={reportArchiveLoading ? 'Loading saved reports…' : 'Your generated reports will appear here.'} /> : <div className="report-archive-list">{reportArchive.map(report => <article className={`report-archive-item ${selectedSavedReport?.report_id === report.report_id ? 'selected' : ''}`} key={report.report_id}><div className="report-archive-copy"><strong>{reportTypeLabel(report.report_type)}</strong><span>{formatDate(report.saved_at)} <i aria-hidden="true">·</i> {report.model}</span><small>{String(report.metadata?.portfolio_row_count ?? 0)} holdings <i aria-hidden="true">·</i> {String(report.metadata?.news_article_count ?? 0)} stories</small></div><Button variant="outline" onClick={() => void openSavedReport(report.report_id)} aria-label={`Open ${reportTypeLabel(report.report_type)} from ${formatDate(report.saved_at)}`}>{selectedSavedReport?.report_id === report.report_id ? 'Opened' : 'Open'}</Button></article>)}</div>}
     </section>;
   }
 
   return (
-    <div className="app-frame">
+    <div className={`app-frame ${navOpen ? 'nav-open' : 'nav-collapsed'}`}>
       <a className="skip-link" href="#main-content">Skip to main content</a>
       <aside className="sidebar" aria-label="Main navigation">
         <a className="brand" href="#main-content" aria-label="Portfolio dashboard">
@@ -1131,49 +1164,49 @@ function App() {
         <div className="workspace-label">PORTFOLIO</div>
         <nav className="nav-list" aria-label="Portfolio">
           {navigation.map(({ label, icon: Icon }) => (
-            <button key={label} title={label} className={`nav-item ${activeSection === label ? 'active' : ''}`} aria-label={label} aria-current={activeSection === label ? 'page' : undefined} onClick={() => openSection(label)}>
+            <Button key={label} variant="ghost" title={label} className={`nav-item ${activeSection === label ? 'active' : ''}`} aria-label={label} aria-current={activeSection === label ? 'page' : undefined} onClick={() => openSection(label)}>
               <Icon size={17} aria-hidden="true" /><span>{label}</span>
-              {label === 'AI insights' && <span className="nav-soon">LOCAL</span>}
-            </button>
+            </Button>
           ))}
         </nav>
         <div className="sidebar-bottom">
-          <div className="privacy-card"><span className="privacy-icon"><ShieldCheck size={17} /></span><div><strong>Local SQLite database</strong><p>Portfolio records stay here. Enabled providers receive their requests.</p></div></div>
-          <button className="nav-item muted-nav" aria-label="Settings" onClick={() => openSection('Settings')}><Settings2 size={17} /><span>Settings</span></button>
-          <button className="nav-item muted-nav" aria-label="Help and guides" onClick={() => openSection('Glossary')}><CircleHelp size={17} /><span>Help & guides</span></button>
-          <p className="sidebar-storage">One device · No hosted account</p>
+          <Button variant="ghost" className="nav-item muted-nav" aria-label="Settings" onClick={() => openSection('Settings')}><Settings2 size={17} /><span>Settings</span></Button>
+          <Button variant="ghost" className="nav-item muted-nav" aria-label="Help and guides" onClick={() => openSection('Glossary')}><CircleHelp size={17} /><span>Help & guides</span></Button>
         </div>
       </aside>
 
-      <Dialog open={mobileNavOpen} onOpenChange={setMobileNavOpen} className="mobile-nav-sheet" labelledBy="mobile-navigation-title">
-        <div className="mobile-sheet-header"><div><p className="overline">LOCAL PORTFOLIO</p><h2 id="mobile-navigation-title">Navigation</h2></div><Button variant="ghost" className="icon-button" aria-label="Close navigation" onClick={() => setMobileNavOpen(false)}><X size={18}/></Button></div>
-        <nav className="mobile-sheet-nav" aria-label="Portfolio sections">{navigation.map(({ label, icon: Icon }) => <Button key={label} variant="ghost" className={`mobile-sheet-item ${activeSection === label ? 'active' : ''}`} aria-current={activeSection === label ? 'page' : undefined} onClick={() => { openSection(label); setMobileNavOpen(false); }}><Icon size={17} aria-hidden="true"/><span>{label}</span>{label === 'AI insights' && <Badge variant="secondary">Local</Badge>}</Button>)}</nav>
-        <div className="mobile-sheet-footer"><Badge variant={apiHealth === 'connected' ? 'success' : apiHealth === 'unavailable' ? 'destructive' : 'outline'}>{apiHealth === 'connected' ? 'API connected' : apiHealth === 'checking' ? 'Connecting' : 'API offline'}</Badge><span>Portfolio data is stored in the local SQLite database.</span></div>
+      <Dialog open={commandOpen} onOpenChange={setCommandOpen} className="command-dialog" labelledBy="command-dialog-title" describedBy="command-dialog-description">
+        <h2 className="sr-only" id="command-dialog-title">Quick actions</h2><p className="sr-only" id="command-dialog-description">Search dashboard sections and common actions. Use Tab to move through the results.</p>
+        <label className="command-search"><Search size={18} aria-hidden="true"/><Input autoFocus value={commandQuery} onChange={event=>setCommandQuery(event.target.value)} aria-label="Search actions" placeholder="Search pages and actions…"/><kbd>ESC</kbd></label>
+        <div className="command-list" aria-label="Dashboard actions">{filteredQuickActions.length ? filteredQuickActions.map(({label,icon:Icon,run})=><Button key={label} variant="ghost" className="command-item" onClick={()=>{setCommandOpen(false);run();}}><Icon size={17} aria-hidden="true"/><span>{label}</span><ArrowUpRight size={14} className="command-item-arrow"/></Button>):<Empty title="No matching actions" description="Try a page name or action such as sync, news, or add holding."/>}</div>
+        <div className="command-footer"><span><kbd>⌘</kbd><kbd>K</kbd> or <kbd>Ctrl</kbd><kbd>K</kbd> to open</span><span><kbd>Enter</kbd> to select</span></div>
       </Dialog>
 
       <main id="main-content" className="main-area" tabIndex={-1}>
         <header className="topbar">
-          <Button variant="ghost" className="mobile-menu icon-button" aria-label="Open navigation" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}><Menu size={19} /></Button>
+          <Button variant="ghost" className="mobile-menu icon-button" aria-label={navOpen ? 'Collapse navigation' : 'Expand navigation'} aria-expanded={navOpen} onClick={() => setNavOpen(value => !value)}><Menu size={19} /></Button>
           <div className="breadcrumb"><span>Portfolio</span><span className="slash">/</span><strong>{activeSection}</strong></div>
           <div className="top-actions">
             {aiLoading && <div className="ai-progress" role="status" aria-live="polite" aria-atomic="true"><span className="ai-progress-label">Generating AI report</span><Progress label="Generating a local AI report" /></div>}
+            <Button variant="outline" className="quick-search-trigger" onClick={()=>{setCommandQuery('');setCommandOpen(true);}} aria-keyshortcuts="Control+K Meta+K"><Search size={15}/><span>Search</span><kbd>⌘ K</kbd></Button>
+            <Button variant="ghost" className="icon-button privacy-toggle" aria-label={privacyMode?'Show portfolio values':'Hide portfolio values'} aria-pressed={privacyMode} title={privacyMode?'Show portfolio values':'Hide portfolio values'} onClick={()=>setPrivacyMode(value=>!value)}>{privacyMode?<EyeOff size={17}/>:<Eye size={17}/>}</Button>
             <div className="accessibility-control" role="group" aria-label="Text size"><Type size={15} aria-hidden="true"/><Button variant="ghost" aria-label="Decrease text size" title="Decrease text size" disabled={fontScale==='normal'} onClick={()=>setFontScale('normal')}>A−</Button><Button variant="ghost" aria-label="Increase text size" title="Increase text size" aria-pressed={fontScale==='large'} disabled={fontScale==='large'} onClick={()=>setFontScale('large')}>A+</Button></div>
             <details className="top-theme-menu"><summary aria-label={`Theme: ${themes.find(theme=>theme.value===preferences?.theme)?.label ?? 'Latte'}`}><Palette size={16}/><span>{themes.find(theme=>theme.value===preferences?.theme)?.label ?? 'Theme'}</span></summary><div className="top-theme-options" role="group" aria-label="Choose color theme"><p>Appearance</p>{themes.map(theme=><Button key={theme.value} variant="ghost" aria-pressed={preferences?.theme===theme.value} onClick={()=>void saveThemePreference(theme.value)} disabled={!preferences||themeSaving}><span className={`theme-swatch theme-${theme.value}`} aria-hidden="true"/>{theme.label}<small>{theme.appearance}</small>{preferences?.theme===theme.value&&<Check size={14}/>}</Button>)}</div></details>
-            <span className="local-pill" title="Local API connection status"><span className={`status-dot ${apiHealth}`} />{apiHealth === 'connected' ? 'LOCAL API' : apiHealth === 'checking' ? 'CONNECTING' : 'API OFFLINE'}</span><Button variant="ghost" className="icon-button" aria-label="Open settings" onClick={() => openSection('Settings')}><Settings2 size={18} /></Button>
+            <span className="local-pill" title="API connection status"><span className={`status-dot ${apiHealth}`} />{apiHealth === 'connected' ? 'CONNECTED' : apiHealth === 'checking' ? 'CONNECTING' : 'OFFLINE'}</span><Button variant="ghost" className="icon-button" aria-label="Open settings" onClick={() => openSection('Settings')}><Settings2 size={18} /></Button>
           </div>
         </header>
 
         <div className="content-wrap">
           {activeSection === 'Manual portfolio' && <section className="manual-editor-page">
-            <div className="welcome-row"><div><p className="overline">SEPARATE FROM ZERODHA</p><h1>Manual <em>portfolio.</em></h1><p className="welcome-copy">Track investments held on other apps. These rows live in a dedicated SQLite table and are included in portfolio analysis when manual imports are visible.</p>{manualDirty && <p className="unsaved-indicator">Unsaved grid edits</p>}</div><div className="manual-actions"><Button variant="outline" disabled={manualBusy || manualDirty} onClick={() => { window.location.href = '/api/manual-portfolio/export'; }}><Download size={15}/> Export CSV</Button><Button variant="outline" onClick={addManualPosition}><Plus size={15}/> Add row</Button><Button onClick={() => void saveManualPortfolio()} disabled={manualBusy || invalidManualRow}><Check size={15}/>{manualBusy ? 'Saving…' : 'Save edits'}</Button></div></div>
+            <div className="welcome-row"><div><p className="overline">SEPARATE FROM ZERODHA</p><h1>Manual <em>portfolio.</em></h1><p className="welcome-copy">Track investments held on other apps and include them in portfolio analysis.</p>{manualDirty && <p className="unsaved-indicator">Unsaved grid edits</p>}</div><div className="manual-actions"><Button variant="outline" disabled={manualBusy || manualDirty} onClick={() => { window.location.href = '/api/manual-portfolio/export'; }}><Download size={15}/> Export CSV</Button><Button variant="outline" onClick={addManualPosition}><Plus size={15}/> Add row</Button><Button onClick={() => void saveManualPortfolio()} disabled={manualBusy || invalidManualRow}><Check size={15}/>{manualBusy ? 'Saving…' : 'Save edits'}</Button></div></div>
             {invalidManualRow && <Alert variant="warning"><AlertTitle>Review the manual ledger</AlertTitle><AlertDescription>Every saved position needs a ticker and source, positive units, and a non-negative buy price.</AlertDescription></Alert>}
             <Card className="manual-import-card"><div className="manual-import-info"><strong>Import a CSV</strong><small>Required columns: ticker, units, market, buy_price, source, asset_type. current_price is optional.</small></div><Select value={csvMode} onChange={event => setCsvMode(event.target.value as 'append' | 'replace')} aria-label="CSV import mode"><option value="append">Append rows</option><option value="replace">Replace manual ledger</option></Select><label className="button button-outline csv-file-button"><Upload size={15}/> Choose CSV<input type="file" accept=".csv,text/csv" onChange={event => { const file = event.target.files?.[0]; if (file) void importManualCsv(file); event.currentTarget.value = ''; }} /></label></Card>
             {selectedManualIds.length > 0 && <Card className="bulk-toolbar"><strong>{selectedManualIds.length} selected</strong><Select value={bulkMarket} onChange={event => setBulkMarket(event.target.value)} aria-label="Bulk set market"><option value="">Set market…</option><option value="NSE">NSE</option><option value="BSE">BSE</option><option value="NYSE">NYSE</option></Select><Select value={bulkType} onChange={event => setBulkType(event.target.value)} aria-label="Bulk set type"><option value="">Set type…</option><option value="stock">Stock</option><option value="mf">Mutual fund</option><option value="etf">ETF</option><option value="bond">Bond</option><option value="other">Other</option></Select><Input aria-label="Bulk set source" list="manual-sources" placeholder="Set source (e.g. Groww)" value={bulkSource} onChange={event => setBulkSource(event.target.value)} /><Button variant="outline" onClick={() => void applyManualBulkEdit()} disabled={manualBusy}>Apply changes</Button><Button variant="outline" className="danger-button" onClick={() => void deleteSelectedManualRows()} disabled={manualBusy}><Trash2 size={14}/> Delete selected</Button></Card>}
             <section className="panel manual-grid-panel"><div className="panel-heading"><div><h2>Investment ledger</h2><p className="section-subtitle">Edit cells directly, then save changes. Price sync fills current prices for stock and ETF rows.</p></div><div className="manual-grid-toolbar"><label className="data-table-filter"><Search size={15} aria-hidden="true"/><Input type="search" aria-label="Filter manual positions" placeholder="Filter positions…" value={manualSearch} onChange={event => setManualSearch(event.target.value)}/></label><Button variant="outline" disabled={refreshing || manualDirty || !preferences?.yfinance_sync_enabled || !preferences?.yahoo_terms_confirmed} onClick={() => void syncMarketData()}><RefreshCw size={14}/>{refreshing ? 'Syncing…' : 'Sync Yahoo prices'}</Button></div></div>
               {preferences && (!preferences.yfinance_sync_enabled || !preferences.yahoo_terms_confirmed) && <p className="data-table-count">Enable Yahoo price sync and confirm its terms in Settings to refresh prices. Save current edits first.</p>}
               <datalist id="manual-sources">{[...new Set(manualPositions.map(item => item.source).filter(Boolean))].map(source => <option key={source} value={source}/>)}</datalist>
-              <Table className="manual-grid"><TableHeader><TableRow><TableHead><input aria-label="Select all filtered positions" type="checkbox" checked={filteredManualPositions.length > 0 && filteredManualPositions.every(row => selectedManualIds.includes(row.id))} onChange={event => setSelectedManualIds(ids => event.target.checked ? [...new Set([...ids, ...filteredManualPositions.map(row => row.id)])] : ids.filter(id => !filteredManualPositions.some(row => row.id === id)))}/></TableHead><TableHead scope="col">Ticker</TableHead><TableHead scope="col">Units</TableHead><TableHead scope="col">Market</TableHead><TableHead scope="col">Buy price</TableHead><TableHead scope="col">Current price</TableHead><TableHead scope="col">Source</TableHead><TableHead scope="col">Type</TableHead><TableHead scope="col">Market value</TableHead></TableRow></TableHeader><TableBody>
-                {filteredManualPositions.map(row => <TableRow key={row.id}><TableCell><input aria-label={`Select ${row.ticker || 'new row'}`} type="checkbox" checked={selectedManualIds.includes(row.id)} onChange={event => setSelectedManualIds(ids => event.target.checked ? [...ids, row.id] : ids.filter(id => id !== row.id))}/></TableCell>
+              <Table className="manual-grid"><TableHeader><TableRow><TableHead><Checkbox aria-label="Select all filtered positions" checked={filteredManualPositions.length > 0 && filteredManualPositions.every(row => selectedManualIds.includes(row.id))} onChange={event => setSelectedManualIds(ids => event.target.checked ? [...new Set([...ids, ...filteredManualPositions.map(row => row.id)])] : ids.filter(id => !filteredManualPositions.some(row => row.id === id)))}/></TableHead><TableHead scope="col">Ticker</TableHead><TableHead scope="col">Units</TableHead><TableHead scope="col">Market</TableHead><TableHead scope="col">Buy price</TableHead><TableHead scope="col">Current price</TableHead><TableHead scope="col">Source</TableHead><TableHead scope="col">Type</TableHead><TableHead scope="col">Market value</TableHead></TableRow></TableHeader><TableBody>
+                {filteredManualPositions.map(row => <TableRow key={row.id}><TableCell><Checkbox aria-label={`Select ${row.ticker || 'new row'}`} checked={selectedManualIds.includes(row.id)} onChange={event => setSelectedManualIds(ids => event.target.checked ? [...ids, row.id] : ids.filter(id => id !== row.id))}/></TableCell>
                   <TableCell><Input aria-label="Ticker" value={row.ticker} onChange={event => syncManualCell(row.id, 'ticker', event.target.value)}/></TableCell>
                   <TableCell><Input aria-label="Units" type="number" min="0.000001" step="any" value={row.units} onChange={event => syncManualCell(row.id, 'units', Number(event.target.value))}/></TableCell>
                   <TableCell><Select aria-label="Market" value={row.market} onChange={event => syncManualCell(row.id, 'market', event.target.value as ManualPosition['market'])}><option value="NSE">NSE</option><option value="BSE">BSE</option><option value="NYSE">NYSE</option></Select></TableCell>
@@ -1189,22 +1222,22 @@ function App() {
             </section>
           </section>}
           {activeSection === 'Settings' && <section className="settings-page">
-            <div className="welcome-row"><div><p className="overline">LOCAL PREFERENCES</p><h1>Make it <em>yours.</em></h1><p className="welcome-copy">Saved in this app’s SQLite database on your device.</p></div><Button onClick={() => void saveSettings()} disabled={!preferences || settingsSaving || themeSaving}>{settingsSaving ? 'Saving…' : 'Save preferences'}</Button></div>
+            <div className="welcome-row"><div><p className="overline">PREFERENCES</p><h1>Make it <em>yours.</em></h1><p className="welcome-copy">Adjust your dashboard and connection settings.</p></div><Button onClick={() => void saveSettings()} disabled={!preferences || settingsSaving || themeSaving}>{settingsSaving ? 'Saving…' : 'Save preferences'}</Button></div>
             <section className="panel settings-panel zerodha-setup-panel"><div className="panel-heading"><div><h2 className="heading-with-provider"><ZerodhaMark/>Zerodha connection</h2><p className="section-subtitle">Create and save the daily read-only Kite access token from this app.</p></div><Badge variant={tokenStatus?.configured ? 'success' : tokenStatus ? 'outline' : 'secondary'}>{tokenStatus?.configured ? 'Token saved' : tokenStatus ? 'Setup required' : 'Checking status'}</Badge></div>
               {kiteTokenNotice && <Alert variant={/failed|error|expired|not enable|did not|does not|could not|invalid/i.test(kiteTokenNotice) ? 'destructive' : 'default'}><AlertDescription>{kiteTokenNotice}</AlertDescription></Alert>}
-              {tokenStatus?.configured && <p className="section-subtitle">A token is saved in the local secret store. Kite access tokens expire daily; replace it after the next login.</p>}
+              {tokenStatus?.configured && <p className="section-subtitle">A token is saved. Kite access tokens expire daily; replace it after the next login.</p>}
               <div className="zerodha-token-form"><div className="settings-fields zerodha-token-fields"><Field label="Kite API key"><Input required type="password" autoComplete="new-password" value={kiteApiKey} onChange={event => { setKiteApiKey(event.target.value); setKiteLoginUrl(''); }} onCopy={event=>event.preventDefault()} onCut={event=>event.preventDefault()} onContextMenu={event=>event.preventDefault()} placeholder="Kite API key" /></Field><Field label="Kite API secret"><Input required type="password" autoComplete="new-password" value={kiteApiSecret} onChange={event => setKiteApiSecret(event.target.value)} onCopy={event=>event.preventDefault()} onCut={event=>event.preventDefault()} onContextMenu={event=>event.preventDefault()} placeholder="Kite API secret" /></Field></div>
                 <div className="zerodha-token-actions"><Button type="button" onClick={() => void persistKiteCredentials()} disabled={!kiteApiKey.trim() || !kiteApiSecret.trim() || kiteTokenBusy}><Check size={14}/>Save credentials</Button>{kiteLoginUrl && <Button type="button" asChild variant="outline"><a href={kiteLoginUrl} target="_blank" rel="noreferrer"><ZerodhaMark/>Continue to Zerodha <ExternalLink size={14}/></a></Button>}</div>
                 {kiteLoginUrl && <a className="kite-login-url" href={kiteLoginUrl} target="_blank" rel="noreferrer">{kiteLoginUrl}</a>}
               </div>
               <div className="kite-redirect-row"><span><strong>Redirect URL registered with Kite</strong><code>{kiteRedirectUrl}</code></span><Button variant="ghost" aria-label="Copy redirect URL" onClick={() => void navigator.clipboard.writeText(kiteRedirectUrl).then(() => setNotice('Redirect URL copied.')).catch(() => setKiteTokenNotice('Clipboard access is unavailable. Copy the redirect URL shown above.'))}><Copy size={15}/> Copy</Button></div>
-              <Collapsible title="Setup and troubleshooting instructions"><ol className="kite-setup-steps"><li>In the <a href="https://developers.kite.trade/" target="_blank" rel="noreferrer">Kite Developer Console</a>, set the app Redirect URL to the exact value shown above, including host, port, and trailing slash.</li><li>Save your API key and secret once. The login URL is then generated and displayed automatically.</li><li>Complete Zerodha sign-in and 2FA. On return, this page exchanges the request token and saves the new expiring access token automatically.</li></ol><Alert variant="warning"><AlertTitle>“The user is not enabled for the app”</AlertTitle><AlertDescription>Confirm that the Developer Console Client ID exactly matches the signed-in account. Sign out of other Zerodha accounts in the browser and retry with the linked account.</AlertDescription></Alert><p className="section-subtitle">API key and secret are stored in the app’s local secret store and prefilled here. The access token expires and must be renewed by signing in again.</p></Collapsible>
+              <Collapsible title="Setup and troubleshooting instructions"><ol className="kite-setup-steps"><li>In the <a href="https://developers.kite.trade/" target="_blank" rel="noreferrer">Kite Developer Console</a>, set the app Redirect URL to the exact value shown above, including host, port, and trailing slash.</li><li>Save your API key and secret once. The login URL is then generated and displayed automatically.</li><li>Complete Zerodha sign-in and 2FA. On return, this page exchanges the request token and saves the new expiring access token automatically.</li></ol><Alert variant="warning"><AlertTitle>“The user is not enabled for the app”</AlertTitle><AlertDescription>Confirm that the Developer Console Client ID exactly matches the signed-in account. Sign out of other Zerodha accounts in the browser and retry with the linked account.</AlertDescription></Alert><p className="section-subtitle">API key and secret are saved and prefilled here. The access token expires and must be renewed by signing in again.</p></Collapsible>
             </section>
             {!preferences ? <div className="panel">Loading saved preferences…</div> : <>
               <section className="panel settings-panel"><div className="panel-heading"><div><h2>Portfolio display & sync</h2><p className="section-subtitle">Choose what appears and which sources refresh.</p></div></div>
                 <label className="setting-row"><span><strong>Show manual positions</strong><small>Include the separate manual ledger and CSV imports in totals, holdings, and allocations.</small></span><Switch checked={preferences.show_manual_imports} onChange={e => updatePreference('show_manual_imports', e.target.checked)} /></label>
                 <label className="setting-row"><span><strong>Sync Zerodha on app open</strong><small>Fetch the latest read-only holdings and SIP snapshot when the dashboard opens.</small></span><Switch checked={preferences.auto_sync_zerodha} onChange={e => updatePreference('auto_sync_zerodha', e.target.checked)} /></label>
-                <div className="theme-setting-row"><div><Palette size={17}/><span><strong>Theme</strong><small>Choose a light or dark Catppuccin flavor. It previews immediately and saves to SQLite.</small></span></div><div className="theme-control"><span className={`theme-swatch theme-${preferences.theme}`} aria-hidden="true">Aa</span><Select aria-label="Color theme" value={preferences.theme} disabled={themeSaving} onChange={event => void saveThemePreference(event.target.value as Preferences['theme'])}><optgroup label="Light themes">{themes.filter(theme => theme.mode === 'light').map(theme => <option key={theme.value} value={theme.value}>{theme.label} · {theme.appearance}</option>)}</optgroup><optgroup label="Dark themes">{themes.filter(theme => theme.mode === 'dark').map(theme => <option key={theme.value} value={theme.value}>{theme.label} · {theme.appearance}</option>)}</optgroup></Select></div></div>
+                <div className="theme-setting-row"><div><Palette size={17}/><span><strong>Theme</strong><small>Choose a light or dark appearance. It previews immediately and saves automatically.</small></span></div><div className="theme-control"><span className={`theme-swatch theme-${preferences.theme}`} aria-hidden="true">Aa</span><Select aria-label="Color theme" value={preferences.theme} disabled={themeSaving} onChange={event => void saveThemePreference(event.target.value as Preferences['theme'])}><optgroup label="Light themes">{themes.filter(theme => theme.mode === 'light').map(theme => <option key={theme.value} value={theme.value}>{theme.label} · {theme.appearance}</option>)}</optgroup><optgroup label="Dark themes">{themes.filter(theme => theme.mode === 'dark').map(theme => <option key={theme.value} value={theme.value}>{theme.label} · {theme.appearance}</option>)}</optgroup></Select></div></div>
               </section>
               <section className="panel settings-panel"><div className="panel-heading"><div><h2>Local AI with Ollama</h2><p className="section-subtitle">Requests stay on your configured local or private Ollama host.</p></div><Button variant="outline" onClick={() => void discoverOllamaModels()}><Server size={15}/> Find installed models</Button></div>
                 <label className="setting-row"><span><strong>Enable AI portfolio review</strong><small>Generate evidence-linked summaries. Output is informational and not financial advice.</small></span><Switch checked={preferences.ollama_enabled} onChange={e => updatePreference('ollama_enabled', e.target.checked)} /></label>
@@ -1218,21 +1251,21 @@ function App() {
                 <label className="setting-row"><span><strong>Refresh Yahoo prices on app open</strong><small>Runs only when price sync is enabled and the permission confirmation is saved.</small></span><Switch checked={preferences.auto_sync_yfinance} onChange={e => updatePreference('auto_sync_yfinance', e.target.checked)} /></label>
                 <label className="setting-row"><span><strong>Enable Yahoo portfolio headlines</strong><small>Fetches holding-specific headlines through yfinance. This is an unofficial Yahoo client; enable only if your use is permitted.</small></span><Switch checked={preferences.yahoo_news_enabled} onChange={e => updatePreference('yahoo_news_enabled', e.target.checked)} /></label>
                 <label className="setting-row"><span><strong>Enable market RSS sources</strong><small>Manually refreshes curated Economic Times, Moneycontrol, Business Standard, and Mint feeds. Results are matched to held names and tickers, with broad Indian-market stories retained for context.</small></span><Switch checked={preferences.rss_news_enabled} onChange={e => updatePreference('rss_news_enabled', e.target.checked)} /></label>
-                <div className="settings-fields news-settings-fields"><label>Article lookback window<Select value={String(preferences.news_lookback_hours)} onChange={e => updatePreference('news_lookback_hours', Number(e.target.value))}><option value="24">Last 24 hours</option><option value="48">Last 48 hours</option><option value="72">Last 3 days</option><option value="168">Last week</option><option value="720">Last month</option></Select><small>Headlines outside this window are omitted from the page and AI context.</small></label><label>Maximum articles<Input type="number" min="5" max="150" step="5" value={preferences.news_max_articles} onChange={e => updatePreference('news_max_articles', Math.max(5, Math.min(150, Number(e.target.value) || 5)))}/><small>Limits news shown and sent to the local model.</small></label></div>
+                <div className="settings-fields news-settings-fields"><label>Article lookback window<Select value={String(preferences.news_lookback_hours)} onChange={e => updatePreference('news_lookback_hours', Number(e.target.value))}><option value="24">Last 24 hours</option><option value="48">Last 48 hours</option><option value="72">Last 3 days</option><option value="168">Last week</option><option value="720">Last month</option></Select><small>Headlines outside this window are omitted from the page and AI context.</small></label><label>Maximum articles<Input type="number" min="5" max="150" step="5" value={preferences.news_max_articles} onChange={e => updatePreference('news_max_articles', Math.max(5, Math.min(150, Number(e.target.value) || 5)))}/><small>Limits news shown and sent with each AI report.</small></label></div>
               </section>
             </>}
           </section>}
 
           {activeSection === 'Glossary' && <section><div className="welcome-row"><div><p className="overline">PLAIN LANGUAGE</p><h1>Portfolio <em>glossary.</em></h1><p className="welcome-copy">Short definitions for the numbers and terms in this dashboard.</p></div></div><label className="glossary-search"><Search size={17}/><Input aria-label="Search glossary" placeholder="Search terms" value={glossarySearch} onChange={e => setGlossarySearch(e.target.value)}/></label><div className="glossary-grid">{filteredGlossary.map(item => <article className="panel glossary-card" key={item.term}><h2>{item.term}</h2><p>{item.definition}</p></article>)}</div></section>}
 
-          {activeSection === 'AI insights' && <section><div className="welcome-row"><div><p className="overline">LOCAL MODEL · OLLAMA</p><h1>AI <em>command centre.</em></h1><p className="welcome-copy">Choose a research lens, generate a sourced report, then revisit its saved run and metadata.</p></div></div>
+          {activeSection === 'AI insights' && <section><div className="welcome-row"><div><p className="overline">OLLAMA AI</p><h1>AI <em>command centre.</em></h1><p className="welcome-copy">Choose a research lens, generate a sourced report, then revisit its saved run and metadata.</p></div></div>
             {!preferences?.ollama_enabled && <Alert><AlertTitle>Local AI is turned off</AlertTitle><AlertDescription>Choose an Ollama endpoint and model, then enable local reports in Settings.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Configure Ollama</Button></Alert>}
             <Tabs value={aiTab} onValueChange={value=>setAiTab(value as AISectionTab)} className="ai-tabs"><TabsList aria-label="AI report types"><TabsTrigger value="portfolio">Portfolio</TabsTrigger><TabsTrigger value="news">News</TabsTrigger><TabsTrigger value="ideas">Stock & fund ideas</TabsTrigger><TabsTrigger value="risk">Risk</TabsTrigger><TabsTrigger value="diversification">Diversification</TabsTrigger><TabsTrigger value="funds">Fund & ETF</TabsTrigger></TabsList>
-            <TabsContent value={aiTab} className="ai-tab-content"><section className="panel ai-report-workspace"><div className="panel-heading"><div><h2>{reportTypeLabel(aiTab)}</h2><p className="section-subtitle">{aiTab==='news' ? 'Refresh coverage and summarize portfolio-linked stories.' : aiTab==='ideas' ? 'Discover candidates and themes from broader market news.' : aiTab==='risk' ? 'Review concentration, data quality, liquidity caveats, and portfolio risks.' : aiTab==='diversification' ? 'Inspect overlap and diversification gaps from the current holdings snapshot.' : aiTab==='funds' ? 'Research fund and ETF categories, overlap, fees and due diligence gaps from available evidence.' : 'Review portfolio structure, holdings, data quality, and watchpoints.'}</p></div><div className="ai-report-actions">{(aiTab==='news'||aiTab==='ideas')&&<Button variant="outline" disabled={newsLoading||!preferences||(!preferences.rss_news_enabled&&!(preferences.yahoo_news_enabled&&preferences.yahoo_terms_confirmed))} onClick={()=>void syncPortfolioNews()}><RefreshCw size={14} className={newsLoading?'spin':''}/>{newsLoading?'Refreshing…':'Refresh news'}</Button>}<Button variant="ai" disabled={aiLoading||!preferences?.ollama_enabled||(aiTab==='news'&&!newsItems.length)} onClick={()=>void generateTypedReport(aiTab,aiTab==='portfolio'?'/api/ai/recommendations':aiTab==='news'?'/api/ai/news-report':undefined)}><Bot size={14}/>{aiLoading?'Generating…':'Generate report'}</Button></div></div>
+            <TabsContent value={aiTab} className="ai-tab-content"><section className="panel ai-report-workspace"><div className="panel-heading"><div><h2>{reportTypeLabel(aiTab)}</h2><p className="section-subtitle">{aiTab==='news' ? 'Refresh coverage and summarize portfolio-linked stories.' : aiTab==='ideas' ? 'Discover candidates and themes from broader market news.' : aiTab==='risk' ? 'Review concentration, data quality, liquidity caveats, and portfolio risks.' : aiTab==='diversification' ? 'Inspect overlap and diversification gaps from the current holdings snapshot.' : aiTab==='funds' ? 'Research fund and ETF categories, overlap, fees and due diligence gaps from available evidence.' : 'Review portfolio structure, holdings, data quality, and watchpoints.'}</p></div><div className="ai-report-actions"><span className="ai-refresh-slot">{(aiTab==='news'||aiTab==='ideas')?<Button variant="outline" disabled={newsLoading||!preferences||(!preferences.rss_news_enabled&&!(preferences.yahoo_news_enabled&&preferences.yahoo_terms_confirmed))} onClick={()=>void syncPortfolioNews()}><RefreshCw size={14} className={newsLoading?'spin':''}/>{newsLoading?'Refreshing…':'Refresh news'}</Button>:<span aria-hidden="true"/>}</span><Button variant="ai" disabled={aiLoading||!preferences?.ollama_enabled||(aiTab==='news'&&!newsItems.length)} onClick={()=>void generateTypedReport(aiTab,aiTab==='portfolio'?'/api/ai/recommendations':aiTab==='news'?'/api/ai/news-report':undefined)}><Bot size={14}/>{aiLoading?'Generating…':'Generate report'}</Button></div></div>
               {aiTab==='news'&&<div className="news-list ai-news-brief">{newsItems.slice(0,8).map(article=><article className="news-card" key={article.id}><div className="news-card-meta"><span>{article.related_tickers?.join(', ')||article.ticker}</span><span>{article.publisher||'News source'}</span><time>{formatDate(article.published_at)}</time></div><h3>{article.url?<a href={article.url} target="_blank" rel="noreferrer">{article.title} <ExternalLink size={13}/></a>:article.title}</h3></article>)}{newsItems.length===0&&<Empty title="No saved market stories" description="Refresh news to populate this report’s evidence base."/>}</div>}
               {(selectedSavedReport?.report_type===aiTab||latestGeneratedReport?.report_type===aiTab)&&<article className="saved-report-view"><div className="panel-heading"><div><p className="overline">{selectedSavedReport?.report_type===aiTab?'SAVED RUN':'LATEST RUN'}</p><h3>{reportTypeLabel(aiTab)} · {(selectedSavedReport?.report_type===aiTab?selectedSavedReport:latestGeneratedReport)?.model}</h3><p className="section-subtitle">Saved {formatDate((selectedSavedReport?.report_type===aiTab?selectedSavedReport:latestGeneratedReport)?.saved_at ?? null)} · {(selectedSavedReport?.report_type===aiTab?selectedSavedReport:latestGeneratedReport)?.scope}</p></div><div className="ai-report-actions"><Button variant="outline" onClick={()=>setReportExpanded(value=>!value)}>{reportExpanded?'Collapse':'Read report'}</Button><Button variant="outline" onClick={()=>exportMarkdownReport((selectedSavedReport?.report_type===aiTab?selectedSavedReport:latestGeneratedReport)!)}><Download size={14}/> Export</Button></div></div>{reportExpanded&&<Markdown source={(selectedSavedReport?.report_type===aiTab?selectedSavedReport:latestGeneratedReport)!.markdown}/>}</article>}
       <details className="saved-runs-disclosure"><summary>Saved runs <span>{reportArchive.length}</span></summary>{renderReportArchive(aiTab)}</details>
-            </section><p className="ai-disclaimer">Reports are saved locally with source counts, snapshot timing, and run-specific metadata. Treat AI output as research support, not personalized investment advice.</p></TabsContent></Tabs>
+            </section><p className="ai-disclaimer">Reports include source counts, snapshot timing, and run-specific metadata. Treat AI output as research support, not personalized investment advice.</p></TabsContent></Tabs>
           </section>}
 
           {activeSection === 'News & reports' && <section className="news-page"><div className="welcome-row"><div><p className="overline">PORTFOLIO COVERAGE</p><h1>Market <em>news.</em></h1><p className="welcome-copy">Cached per-holding Yahoo Finance headlines and market RSS stories matched to holdings. AI research reports live in the AI insights command centre.</p></div><Button variant="outline" onClick={()=>openSection('AI insights')}>Open AI insights</Button></div>
@@ -1252,7 +1285,7 @@ function App() {
             </div>
           </section>
 
-          {apiHealth === 'unavailable' && <Alert variant="destructive"><AlertTitle>Local API is offline</AlertTitle><AlertDescription>Start the backend with <code>make api</code>, then refresh this page. Saved portfolio data is not deleted when the API is unavailable.</AlertDescription></Alert>}
+          {apiHealth === 'unavailable' && <Alert variant="destructive"><AlertTitle>Dashboard service is offline</AlertTitle><AlertDescription>Start the backend with <code>make api</code>, then refresh this page. Reconnect the service, then refresh this page.</AlertDescription></Alert>}
           {tokenStatus && !tokenStatus.configured && <Alert><AlertTitle>Connect Zerodha</AlertTitle><AlertDescription>{tokenStatus.message} Save a fresh Kite access token in Settings before syncing your account.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Open Zerodha setup</Button></Alert>}
 
           <section aria-labelledby="summary-heading">
@@ -1280,7 +1313,7 @@ function App() {
                       </div>
                       <div className="allocation-meta">
                         <span>{formatCurrency(bucket.value)}</span>
-                        <small>{bucket.percentage.toFixed(1)}%</small>
+                        <small>{formatPercent(bucket.percentage)}</small>
                       </div>
                     </div>
                   ))}
@@ -1289,17 +1322,17 @@ function App() {
               <div className="legend-row"><span><i className="legend-dot equity" />Equity</span><span><i className="legend-dot funds" />Mutual funds</span><span><i className="legend-dot other" />Other</span></div>
             </section>
             <section className="panel insight-panel" aria-labelledby="insight-heading">
-              <div className="insight-top"><span className="ai-mark"><Bot size={18} /></span><span className="ai-local">PRIVATE · LOCAL AI</span></div>
+              <div className="insight-top"><span className="ai-mark"><Bot size={18} /></span><span className="ai-local">AI INSIGHT</span></div>
               <h2 id="insight-heading">A little perspective.</h2>
               <p>Ask your local Gemma model to explain your allocation, spot concentration, or summarize recent changes.</p>
-              <div className="model-status"><span className={`model-dot ${preferences?.ollama_enabled ? 'connected' : ''}`} /><span>{preferences?.ollama_enabled ? preferences.ollama_model : 'Model not enabled'}</span><button className="text-button" onClick={() => openSection('Settings')}>Configure <ArrowUpRight size={13} /></button></div>
+              <div className="model-status"><span className={`model-dot ${preferences?.ollama_enabled ? 'connected' : ''}`} /><span>{preferences?.ollama_enabled ? preferences.ollama_model : 'Model not enabled'}</span><Button variant="ghost" className="text-button" onClick={() => openSection('Settings')}>Configure <ArrowUpRight size={13} /></Button></div>
               <Button variant="ai" onClick={() => openSection('AI insights')}><Bot size={16} /> Explore insights</Button>
               <span className="ai-disclaimer">Informational only. Never a trade instruction.</span>
             </section>
           </div>
 
           {activeSection === 'Overview' && <section className="panel source-split-panel" aria-labelledby="source-split-title"><div className="panel-heading"><div><h2 id="source-split-title">Portfolio by source</h2><p className="section-subtitle">Market value grouped by the account or app where you hold it</p></div><Button variant="ghost" onClick={() => openSection('Manual portfolio')}>Manage manual rows <ArrowUpRight size={14}/></Button></div>
-            {Object.keys(sourceSplit).length === 0 ? <p className="source-split-empty">Add manual positions or sync Zerodha to see source coverage here.</p> : <div className="source-split-list">{Object.entries(sourceSplit).sort((a, b) => b[1].value - a[1].value).map(([key, item]) => { const [name] = key.split('|'); const percentage = currencyTotals[item.currency] ? item.value / currencyTotals[item.currency] * 100 : 0; return <div className="source-split-row" key={key}><span className="source-split-name"><i className="legend-dot equity"/><strong>{name}</strong><small>{item.count} holding{item.count === 1 ? '' : 's'}{item.unpriced ? ` · ${item.unpriced} unpriced` : ''}</small></span><span className="source-split-value">{formatCurrency(item.value, item.currency)}<small>{percentage.toFixed(1)}% of priced {item.currency} holdings</small></span></div>; })}</div>}
+            {Object.keys(sourceSplit).length === 0 ? <p className="source-split-empty">Add manual positions or sync Zerodha to see source coverage here.</p> : <div className="source-split-list">{Object.entries(sourceSplit).sort((a, b) => b[1].value - a[1].value).map(([key, item]) => { const [name] = key.split('|'); const percentage = currencyTotals[item.currency] ? item.value / currencyTotals[item.currency] * 100 : 0; return <div className="source-split-row" key={key}><span className="source-split-name"><i className="legend-dot equity"/><strong>{name}</strong><small>{item.count} holding{item.count === 1 ? '' : 's'}{item.unpriced ? ` · ${item.unpriced} unpriced` : ''}</small></span><span className="source-split-value">{formatCurrency(item.value, item.currency)}<small>{formatPercent(percentage)} of priced {item.currency} holdings</small></span></div>; })}</div>}
           </section>}
 
           <section className="panel holdings-panel" aria-labelledby="holdings-heading">
@@ -1356,7 +1389,7 @@ function App() {
           {activeSection === 'Holdings' && <section className="panel price-sync-panel"><div><h2>Market prices</h2><p className="section-subtitle">Yahoo Finance data via yfinance · refreshes supported equity symbols and manual stock/ETF positions.</p>{preferences && (!preferences.yfinance_sync_enabled || !preferences.yahoo_terms_confirmed) && <p className="section-subtitle">Enable Yahoo price sync and confirm its terms in Settings to use this action.</p>}</div><Button variant="outline" disabled={refreshing || !preferences?.yfinance_sync_enabled || !preferences?.yahoo_terms_confirmed} onClick={() => void syncMarketData()}><RefreshCw size={15}/>{refreshing ? 'Refreshing…' : 'Sync prices'}</Button></section>}
           </>}
 
-          <footer className="page-footer"><span>Local portfolio dashboard · No hosted account</span><span><ShieldCheck size={14} /> Records stored in SQLite; enabled providers receive their own requests.</span></footer>
+          <footer className="page-footer"><span>Portfolio dashboard</span></footer>
         </div>
       </main>
       <AlertDialog open={confirmation !== null} title={confirmation?.title ?? ''} description={confirmation?.description ?? ''} confirmLabel={confirmation?.confirmLabel ?? 'Confirm'} destructive={confirmation?.destructive} onOpenChange={open => { if (!open) resolveConfirmation(false); }} onConfirm={() => resolveConfirmation(true)} />

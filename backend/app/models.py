@@ -212,3 +212,11 @@ class ManualSipScheduleInput(BaseModel):
 
 class ManualSipEntryStatus(BaseModel):
     status: Literal["scheduled/unconfirmed", "confirmed", "skipped"]
+
+
+class NpsAccountInput(BaseModel):
+    valuation: float = Field(ge=0)
+    contribution_amount: float = Field(gt=0)
+    contribution_day: int = Field(ge=1, le=31)
+    valuation_as_of: date
+    annual_return_percent: float = Field(ge=0, le=30)

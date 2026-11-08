@@ -26,6 +26,7 @@ from .models import (
     ManualPositionInput,
     ManualSipEntryStatus,
     ManualSipScheduleInput,
+    NpsAccountInput,
     Preferences,
 )
 from .ollama_adapter import (
@@ -47,6 +48,7 @@ from .storage import (
     get_ai_report,
     get_holdings,
     get_news_articles,
+    get_nps_account,
     get_preferences,
     get_sips,
     get_sources,
@@ -64,6 +66,7 @@ from .storage import (
     save_ai_report,
     save_manual_positions,
     save_manual_sip_schedule,
+    save_nps_account,
     save_preferences,
     save_zerodha_token,
     save_zerodha_credentials,
@@ -628,7 +631,7 @@ def portfolio_summary() -> dict:
     preferences = get_preferences()
     token = get_zerodha_token()
     visible_holdings = get_holdings(include_manual=preferences.show_manual_imports)
-    if not token.get("access_token") and not visible_holdings:
+    if not token.get("access_token") and not visible_holdings and not get_nps_account():
         return {
             "total_value": None,
             "day_change": None,
@@ -656,6 +659,16 @@ def portfolio_holdings() -> dict[str, list[dict]]:
             for holding in get_holdings(include_manual=preferences.show_manual_imports)
         ]
     }
+
+
+@app.get("/api/nps")
+def nps_account() -> dict[str, object | None]:
+    return {"account": get_nps_account()}
+
+
+@app.put("/api/nps")
+def update_nps_account(payload: NpsAccountInput) -> dict[str, object]:
+    return {"account": save_nps_account(payload)}
 
 
 @app.get("/api/portfolio/allocations")

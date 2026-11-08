@@ -24,6 +24,25 @@ def test_empty_summary_is_not_fabricated():
     assert payload["message"] == "Setup required"
 
 
+def test_nps_is_persisted_and_included_in_portfolio():
+    client.delete("/api/local-data")
+    response = client.put("/api/nps", json={
+        "valuation": 100000.00,
+        "contribution_amount": 5000,
+        "contribution_day": 5,
+        "annual_return_percent": 8,
+        "valuation_as_of": "2025-01-01",
+    })
+    assert response.status_code == 200
+    assert client.get("/api/nps").json()["account"]["valuation"] == 100000.00
+    holdings = client.get("/api/portfolio/holdings").json()["items"]
+    assert any(row["asset_class"] == "nps" and row["value"] == 100000.00 for row in holdings)
+    summary = client.get("/api/portfolio/summary").json()
+    assert summary["total_value"] == 100000.00
+    allocations = {row["asset_class"]: row["value"] for row in client.get("/api/portfolio/allocations").json()}
+    assert allocations["nps"] == 100000.00
+
+
 def test_token_status_and_save_workflow():
     client.delete("/api/local-data")
     token_status = client.get("/api/token/status")

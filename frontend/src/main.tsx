@@ -33,7 +33,8 @@ import './style.css';
 import './theme.css';
 
 type Health = 'checking' | 'connected' | 'unavailable';
-type Section = 'Overview' | 'Holdings' | 'Manual portfolio' | 'News & reports' | 'Activity' | 'AI insights' | 'Glossary' | 'Settings';
+type Section = 'Overview' | 'Holdings' | 'Projections' | 'Manual portfolio' | 'News & reports' | 'Activity' | 'AI insights' | 'Glossary' | 'Settings';
+type NpsAccount = { valuation: number; contribution_amount: number; contribution_day: number; annual_return_percent: number; valuation_as_of: string; updated_at?: string };
 type Confirmation = { title: string; description: string; confirmLabel: string; destructive?: boolean };
 
 type ManualPosition = {
@@ -215,6 +216,7 @@ type SourceStatusItem = {
 const navigation: { label: Section; icon: typeof LayoutDashboard }[] = [
   { label: 'Overview', icon: LayoutDashboard },
   { label: 'Holdings', icon: BriefcaseBusiness },
+  { label: 'Projections', icon: ChartNoAxesCombined },
   { label: 'Manual portfolio', icon: Grid2X2 },
   { label: 'News & reports', icon: Newspaper },
   { label: 'Activity', icon: Activity },
@@ -226,6 +228,7 @@ const navigation: { label: Section; icon: typeof LayoutDashboard }[] = [
 const sectionPaths: Record<Section, string> = {
   Overview: '/',
   Holdings: '/holdings',
+  Projections: '/projections',
   'Manual portfolio': '/manual-portfolio',
   'News & reports': '/news',
   Activity: '/activity',
@@ -287,6 +290,15 @@ function App() {
   const [holdings, setHoldings] = useState<HoldingRow[]>([]);
   const [sips, setSips] = useState<SipRow[]>([]);
   const [manualSips, setManualSips] = useState<ManualSipSchedule[]>([]);
+  const [npsAccount, setNpsAccount] = useState<NpsAccount | null>(null);
+  const [npsValuation, setNpsValuation] = useState('100000.00');
+  const [npsContribution, setNpsContribution] = useState('5000');
+  const [npsDay, setNpsDay] = useState('5');
+  const [npsReturn, setNpsReturn] = useState('8');
+  const [npsAsOf, setNpsAsOf] = useState('2025-01-01');
+  const [npsBusy, setNpsBusy] = useState(false);
+  const [projectionYears, setProjectionYears] = useState(10);
+  const [projectionRates, setProjectionRates] = useState<Record<string, number>>({ equity: 10, mutual_fund: 10, etf: 9, bond: 6, other: 5, equity_position: 10, derivative_position: 0, nps: 10 });
   const [manualSipBusy, setManualSipBusy] = useState(false);
   const [sipSchemeName, setSipSchemeName] = useState('');
   const [sipSource, setSipSource] = useState('Manual');
@@ -391,6 +403,25 @@ function App() {
     totals[item.currency] = (totals[item.currency] ?? 0) + item.value;
     return totals;
   }, {});
+  const projectionRows = holdings.filter(row => row.currency === 'INR' && row.value != null && row.value > 0).map(row => {
+    const type = row.asset_class || 'other';
+    const annual = (projectionRates[type] ?? projectionRates.other ?? 5) / 100;
+    const current = row.value ?? 0;
+    const cost = row.quantity != null && row.average_cost != null ? row.quantity * row.average_cost : null;
+    let projected = current * Math.pow(1 + annual, projectionYears);
+    if (type === 'nps' && npsAccount) {
+      const months = projectionYears * 12;
+      const monthlyRate = Math.pow(1 + annual, 1 / 12) - 1;
+      const contributions = monthlyRate === 0
+        ? npsAccount.contribution_amount * months
+        : npsAccount.contribution_amount * ((Math.pow(1 + monthlyRate, months) - 1) / monthlyRate) * (1 + monthlyRate);
+      projected += contributions;
+    }
+    return { ...row, annual, current, cost, projected, gain: projected - current };
+  });
+  const projectionCurrentTotal = projectionRows.reduce((total, row) => total + row.current, 0);
+  const projectionFutureTotal = projectionRows.reduce((total, row) => total + row.projected, 0);
+  const projectionCostTotal = projectionRows.reduce((total, row) => total + (row.cost ?? 0), 0);
   const invalidManualRow = manualPositions.some(row =>
     !row.ticker.trim() || !row.source.trim() || row.units <= 0 || row.buy_price < 0,
   );
@@ -480,12 +511,13 @@ function App() {
 
   async function loadPortfolioData() {
     try {
-      const [holdingsResponse, allocationsResponse, sourcesResponse, sipsResponse, manualSipsResponse] = await Promise.all([
+      const [holdingsResponse, allocationsResponse, sourcesResponse, sipsResponse, manualSipsResponse, npsResponse] = await Promise.all([
         fetch('/api/portfolio/holdings'),
         fetch('/api/portfolio/allocations'),
         fetch('/api/sources'),
         fetch('/api/portfolio/sips'),
         fetch('/api/manual-sips'),
+        fetch('/api/nps'),
       ]);
       if (holdingsResponse.ok) {
         const payload = (await holdingsResponse.json()) as { items?: HoldingRow[] };
@@ -517,6 +549,10 @@ function App() {
       } else {
         setManualSips([]);
       }
+      if (npsResponse.ok) {
+        const payload = await npsResponse.json() as { account?: NpsAccount | null };
+        if (payload.account) { setNpsAccount(payload.account); setNpsValuation(String(payload.account.valuation)); setNpsContribution(String(payload.account.contribution_amount)); setNpsDay(String(payload.account.contribution_day)); setNpsReturn(String(payload.account.annual_return_percent)); setNpsAsOf(payload.account.valuation_as_of); }
+      }
     } catch {
       setHoldings([]);
       setAllocations([]);
@@ -524,6 +560,16 @@ function App() {
       setSips([]);
       setManualSips([]);
     }
+  }
+
+  async function saveNps(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setNpsBusy(true);
+    try {
+      const response = await fetch('/api/nps', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ valuation: Number(npsValuation), contribution_amount: Number(npsContribution), contribution_day: Number(npsDay), annual_return_percent: Number(npsReturn), valuation_as_of: npsAsOf }) });
+      const payload = await response.json(); if (!response.ok) throw new Error(payload.detail || 'NPS account could not be saved.');
+      setNpsAccount(payload.account); await Promise.all([loadPortfolioData(), loadSummary()]); setNotice('NPS account updated.');
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'NPS account could not be saved.'); }
+    finally { setNpsBusy(false); }
   }
 
   async function createManualSip(event: FormEvent<HTMLFormElement>) {
@@ -1258,6 +1304,14 @@ function App() {
 
           {activeSection === 'Glossary' && <section><div className="welcome-row"><div><p className="overline">PLAIN LANGUAGE</p><h1>Portfolio <em>glossary.</em></h1><p className="welcome-copy">Short definitions for the numbers and terms in this dashboard.</p></div></div><label className="glossary-search"><Search size={17}/><Input aria-label="Search glossary" placeholder="Search terms" value={glossarySearch} onChange={e => setGlossarySearch(e.target.value)}/></label><div className="glossary-grid">{filteredGlossary.map(item => <article className="panel glossary-card" key={item.term}><h2>{item.term}</h2><p>{item.definition}</p></article>)}</div></section>}
 
+          {activeSection === 'Projections' && <section className="projections-page">
+            <div className="welcome-row"><div><p className="overline">SCENARIO PLANNER</p><h1>Investment <em>projections.</em></h1><p className="welcome-copy">Explore illustrative future values across your INR holdings using editable annual-return assumptions.</p></div><label className="projection-horizon">Projection horizon<Select value={projectionYears} onChange={event => setProjectionYears(Number(event.target.value))}>{[1,5,10,15,20,25,30,40].map(year=><option key={year} value={year}>{year} years</option>)}</Select></label></div>
+            <Alert variant="warning"><AlertTitle>Scenario estimates, not forecasts</AlertTitle><AlertDescription>Saved values and cost bases provide a snapshot, not enough history to estimate reliable future returns. Each asset class uses an editable nominal annual-return assumption. Values exclude new contributions except the NPS scheduled amount, and do not account for inflation, taxes, fees, volatility, or withdrawals.</AlertDescription></Alert>
+            <div className="metric-grid projection-summary-grid"><Card className="metric-card"><div className="metric-label">Current visible INR value</div><div className="metric-value">{formatCurrency(projectionCurrentTotal)}</div><div className="metric-foot">Based on currently priced/saved values</div></Card><Card className="metric-card"><div className="metric-label">Illustrative value in {projectionYears} years</div><div className="metric-value">{formatCurrency(projectionFutureTotal)}</div><div className="metric-foot">Constant annual returns assumed</div></Card><Card className="metric-card"><div className="metric-label">Recorded cost basis</div><div className="metric-value">{formatCurrency(projectionCostTotal || null)}</div><div className="metric-foot">Only rows with quantity and average cost</div></Card></div>
+            <section className="panel projection-assumptions"><div className="panel-heading"><div><h2>Return assumptions by investment type</h2><p className="section-subtitle">Change an assumption to immediately update the scenario</p></div></div><div className="projection-rate-grid">{['equity','mutual_fund','etf','bond','other','equity_position','derivative_position','nps'].map(type=><Field key={type} label={type.replaceAll('_',' ')}><Input aria-label={`${type} annual return percentage`} type="number" min="-100" max="100" step="0.5" value={projectionRates[type] ?? 0} onChange={event=>setProjectionRates(current=>({...current,[type]:Number(event.target.value)}))}/></Field>)}</div></section>
+            <section className="panel projection-table-panel"><div className="panel-heading"><div><h2>Position scenarios</h2><p className="section-subtitle">Compounded annually from the latest saved value</p></div></div><div className="table-scroll"><table className="projection-table"><thead><tr><th>Investment</th><th>Type</th><th>Current value</th><th>Cost basis</th><th>Assumed return</th><th>Value in {projectionYears} years</th><th>Scenario change</th></tr></thead><tbody>{projectionRows.map(row=><tr key={row.id}><td>{row.instrument_name}</td><td>{row.asset_class.replaceAll('_',' ')}</td><td>{formatCurrency(row.current)}</td><td>{formatCurrency(row.cost)}</td><td>{row.annual.toLocaleString('en-IN',{style:'percent',maximumFractionDigits:1})}</td><td>{formatCurrency(row.projected)}</td><td>{formatCurrency(row.gain)}</td></tr>)}</tbody></table>{projectionRows.length===0&&<Empty title="No valued INR holdings to project" description="Sync or add investments to view scenario estimates."/>}</div></section>
+          </section>}
+
           {activeSection === 'AI insights' && <section><div className="welcome-row"><div><p className="overline">OLLAMA AI</p><h1>AI <em>command centre.</em></h1><p className="welcome-copy">Choose a research lens, generate a sourced report, then revisit its saved run and metadata.</p></div></div>
             {!preferences?.ollama_enabled && <Alert><AlertTitle>Local AI is turned off</AlertTitle><AlertDescription>Choose an Ollama endpoint and model, then enable local reports in Settings.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Configure Ollama</Button></Alert>}
             <Tabs value={aiTab} onValueChange={value=>setAiTab(value as AISectionTab)} className="ai-tabs"><TabsList aria-label="AI report types"><TabsTrigger value="portfolio">Portfolio</TabsTrigger><TabsTrigger value="news">News</TabsTrigger><TabsTrigger value="ideas">Stock & fund ideas</TabsTrigger><TabsTrigger value="risk">Risk</TabsTrigger><TabsTrigger value="diversification">Diversification</TabsTrigger><TabsTrigger value="funds">Fund & ETF</TabsTrigger></TabsList>
@@ -1369,6 +1423,21 @@ function App() {
                 { id: 'action', header: 'Update', cell: entry => entry.status === 'scheduled/unconfirmed' ? <div className="manual-sip-entry-actions"><Button variant="outline" onClick={() => void updateManualSipEntry(entry, 'confirmed')}>Confirm paid</Button><Button variant="ghost" onClick={() => void updateManualSipEntry(entry, 'skipped')}>Skip</Button></div> : <Button variant="ghost" onClick={() => void updateManualSipEntry(entry, 'scheduled/unconfirmed')}>Reopen</Button> },
               ]}/></Collapsible>}
             </article>)}</div>}
+          </section>
+
+          <section className="panel holdings-panel manual-sips-panel" aria-labelledby="nps-heading">
+            <div className="panel-heading holdings-heading"><div><h2 id="nps-heading">NPS · Tier-I</h2><p className="section-subtitle">Track your account valuation and monthly contribution plan</p></div></div>
+            <p className="manual-sip-disclaimer">Your NPS Tier-I account value counts toward portfolio totals and AI analysis. Contribution reminders are a schedule only; this app does not make payments or add contributions to valuation automatically.</p>
+            <form className="manual-sip-form" onSubmit={event => void saveNps(event)}>
+              <Field label="Current valuation (₹)"><Input required type="number" min="0" step="0.01" value={npsValuation} onChange={event => setNpsValuation(event.target.value)} /></Field>
+              <Field label="Monthly contribution (₹)"><Input required type="number" min="0.01" step="0.01" value={npsContribution} onChange={event => setNpsContribution(event.target.value)} /></Field>
+              <Field label="Contribution day"><Select value={npsDay} onChange={event => setNpsDay(event.target.value)}>{Array.from({length:31},(_,i)=>i+1).map(day=><option key={day} value={day}>{day}{day===1?'st':day===2?'nd':day===3?'rd':'th'} of month</option>)}</Select></Field>
+              <Field label="Valuation as of"><Input required type="date" value={npsAsOf} onChange={event => setNpsAsOf(event.target.value)} /></Field>
+              <Field label="Estimated annual return (%)" description="Illustrative assumption. Change it to model a different market return."><Input required type="number" min="0" max="30" step="0.1" value={npsReturn} onChange={event => setNpsReturn(event.target.value)} /></Field>
+              <div className="manual-sip-form-actions"><Button type="submit" disabled={npsBusy || !npsValuation || !npsContribution}><Landmark size={14}/>{npsBusy ? 'Saving…' : 'Save NPS details'}</Button></div>
+            </form>
+            <div className="manual-sip-dates">{npsAccount ? <>Current Tier-I value <strong>{formatCurrency(npsAccount.valuation)}</strong> · {formatCurrency(npsAccount.contribution_amount)} scheduled for day {npsAccount.contribution_day} monthly · Valued {formatDate(npsAccount.valuation_as_of)}</> : 'Enter the valuation and contribution details from your NPS account.'}</div>
+            {npsAccount && <div className="nps-projection-grid">{[10,20,30,40].map(years => { const months=years*12; const monthlyRate=npsAccount.annual_return_percent/100/12; const base=npsAccount.valuation*Math.pow(1+monthlyRate,months); const contributions=monthlyRate===0?npsAccount.contribution_amount*months:npsAccount.contribution_amount*((Math.pow(1+monthlyRate,months)-1)/monthlyRate)*(1+monthlyRate); const total=base+contributions; const invested=npsAccount.valuation+npsAccount.contribution_amount*months; return <Card className="nps-projection-card" key={years}><div className="metric-label">In {years} years</div><div className="metric-value">{formatCurrency(total)}</div><div className="metric-foot">Projected growth {formatCurrency(total-invested)}</div><small>Contributions + estimated returns</small></Card>; })}<p className="nps-projection-note">Illustration only: monthly contributions are assumed to continue at the configured amount and compound monthly at {npsAccount.annual_return_percent}% annually. Market returns vary; taxes, fees, inflation, contribution interruptions, and NPS withdrawal rules are not modeled. This is not a withdrawal eligibility estimate.</p></div>}
           </section>
 
           {sources.length > 0 && (

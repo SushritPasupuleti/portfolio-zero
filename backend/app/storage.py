@@ -13,6 +13,7 @@ from .models import (
     AllocationBucket,
     Holding,
     ManualPositionInput,
+    NpsAccountInput,
     ManualSipScheduleInput,
     PortfolioSummary,
     Preferences,
@@ -279,6 +280,20 @@ def initialize_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_manual_sip_entries_schedule_date "
             "ON manual_sip_entries(schedule_id, effective_date DESC)"
         )
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS nps_account (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                valuation REAL NOT NULL CHECK(valuation >= 0),
+                contribution_amount REAL NOT NULL CHECK(contribution_amount > 0),
+                contribution_day INTEGER NOT NULL CHECK(contribution_day BETWEEN 1 AND 31),
+                annual_return_percent REAL NOT NULL DEFAULT 10 CHECK(annual_return_percent BETWEEN 0 AND 30),
+                valuation_as_of TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+        )
+        nps_columns = {row["name"] for row in connection.execute("PRAGMA table_info(nps_account)").fetchall()}
+        if "annual_return_percent" not in nps_columns:
+            connection.execute("ALTER TABLE nps_account ADD COLUMN annual_return_percent REAL NOT NULL DEFAULT 10")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS imports (
@@ -825,11 +840,56 @@ def get_holdings(include_manual: bool = True) -> list[Holding]:
     ]
     if include_manual:
         holdings.extend(manual_positions_as_holdings())
+        nps = get_nps_account()
+        if nps:
+            holdings.append(Holding(
+                id="nps:tier-i", instrument_name="NPS Tier-I", asset_class="nps",
+                quantity=None, average_cost=None, last_price=None, value=nps["valuation"],
+                pnl=None, price_as_of=_from_db(nps["valuation_as_of"]),
+                price_source="Account valuation", currency="INR", source="NPS",
+                as_of=_from_db(nps["updated_at"]),
+            ))
     return [
         holding
         for holding in holdings
         if include_manual or not _is_manual_source(holding.source)
     ]
+
+
+def get_nps_account() -> dict[str, object] | None:
+    with get_connection() as connection:
+        row = connection.execute("SELECT * FROM nps_account WHERE id=1").fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    rate = float(item["annual_return_percent"]) / 1200
+    projections = []
+    for years in (10, 20, 30, 40):
+        months = years * 12
+        balance = float(item["valuation"]) * (1 + rate) ** months
+        contributions = float(item["contribution_amount"]) * months if rate == 0 else (
+            float(item["contribution_amount"]) * (((1 + rate) ** months - 1) / rate) * (1 + rate)
+        )
+        total = balance + contributions
+        invested = float(item["valuation"]) + float(item["contribution_amount"]) * months
+        projections.append({"years": years, "value": total, "contributed": invested, "estimated_growth": total - invested})
+    item["projections"] = projections
+    return item
+
+
+def save_nps_account(item: NpsAccountInput) -> dict[str, object]:
+    now = _utc_iso(datetime.now(UTC))
+    with get_connection() as connection:
+        connection.execute(
+            """INSERT INTO nps_account(id, valuation, contribution_amount, contribution_day, annual_return_percent, valuation_as_of, updated_at)
+               VALUES (1, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET valuation=excluded.valuation,
+               contribution_amount=excluded.contribution_amount, contribution_day=excluded.contribution_day,
+               annual_return_percent=excluded.annual_return_percent,
+               valuation_as_of=excluded.valuation_as_of, updated_at=excluded.updated_at""",
+            (item.valuation, item.contribution_amount, item.contribution_day, item.annual_return_percent, item.valuation_as_of.isoformat(), now),
+        )
+    return get_nps_account() or {}
 
 
 def get_sips(include_manual: bool = True) -> list[Sip]:
@@ -1025,7 +1085,8 @@ def set_manual_sip_entry_status(entry_id: str, status: str) -> bool:
 
 def calculate_summary(include_manual: bool = True) -> PortfolioSummary:
     rows = get_holdings(include_manual=include_manual)
-    if not rows:
+    nps = get_nps_account() if include_manual else None
+    if not rows and not nps:
         return PortfolioSummary(
             total_value=None,
             day_change=None,
@@ -1051,6 +1112,10 @@ def calculate_summary(include_manual: bool = True) -> PortfolioSummary:
         ),
         0.0,
     )
+    if nps:
+        # Current valuation is the only available NPS cost basis; no contribution
+        # ledger is inferred from the account notification.
+        invested += float(nps["valuation"])
     pnl = sum((holding.pnl for holding in inr_rows if holding.pnl is not None), 0.0)
     as_of = max(
         (holding.as_of for holding in inr_rows if holding.as_of is not None),
@@ -1062,7 +1127,7 @@ def calculate_summary(include_manual: bool = True) -> PortfolioSummary:
     if any(holding.value is None or holding.as_of is None for holding in rows):
         status = "partial"
         warnings.append("Some holdings are missing a value or as-of timestamp.")
-    if any(holding.last_price is None for holding in rows):
+    if any(holding.last_price is None and holding.asset_class != "nps" for holding in rows):
         warnings.append("Some prices are unavailable.")
     if len(inr_rows) != len(rows):
         status = "partial"
@@ -1382,6 +1447,7 @@ def clear_local_data() -> None:
         connection.execute("DELETE FROM imports")
         connection.execute("DELETE FROM preferences")
         connection.execute("DELETE FROM manual_positions")
+        connection.execute("DELETE FROM nps_account")
         connection.execute("DELETE FROM news_articles")
         connection.execute("DELETE FROM news_source_meta")
         connection.execute("DELETE FROM ai_reports")

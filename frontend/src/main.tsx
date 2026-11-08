@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { createBrowserRouter, Navigate, RouterProvider, useBlocker, useLocation, useNavigate } from 'react-router';
 import {
   Activity, ArrowUpRight, BookOpen, Bot, BriefcaseBusiness,
-  ChartNoAxesCombined, Check, CircleHelp, Download, Grid2X2,
-  ExternalLink, Landmark, LayoutDashboard, Menu, Newspaper, Palette, Plus, RefreshCw, Search, Server, Settings2,
+  ChartNoAxesCombined, Check, CircleHelp, Copy, Download, Grid2X2,
+  ExternalLink, Landmark, LayoutDashboard, Menu, Newspaper, Palette, Plus, RefreshCw, Search, Server, Settings2, Type,
   ShieldCheck, Trash2, Upload, WalletCards, X,
 } from 'lucide-react';
 import { Button } from './components/ui/button';
@@ -23,6 +23,7 @@ import { Progress } from './components/ui/progress';
 import { Select } from './components/ui/select';
 import { Switch } from './components/ui/switch';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './components/ui/table';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { ToastViewport, type ToastItem } from './components/ui/toast';
 import { Skeleton } from './components/ui/skeleton';
 import { Tooltip } from './components/ui/tooltip';
@@ -82,20 +83,23 @@ type NewsItem = {
 
 type AIReport = {
   report_id: string;
-  report_type: 'portfolio' | 'news';
+      report_type: 'portfolio' | 'news' | 'ideas' | 'risk' | 'diversification' | 'funds';
   markdown: string;
   model: string;
   generated_at: string | null;
   saved_at: string;
   scope: string;
+  metadata?: Record<string, unknown>;
 };
 
 type AIReportSummary = Omit<AIReport, 'markdown'>;
 
 type ReportType = AIReport['report_type'];
+type AISectionTab = 'portfolio' | 'news' | 'ideas' | 'risk' | 'diversification' | 'funds';
 
 function reportTypeLabel(type: ReportType): string {
-  return type === 'portfolio' ? 'Portfolio review' : 'News report';
+  const labels: Record<ReportType, string> = { portfolio: 'Portfolio review', news: 'News report', ideas: 'Stock & fund ideas', risk: 'Risk & concentration', diversification: 'Diversification', funds: 'Fund & ETF research' };
+  return labels[type];
 }
 
 function statusBadgeVariant(state: string): 'success' | 'destructive' | 'secondary' | 'outline' {
@@ -245,7 +249,7 @@ const modelPresets = [
   { name: 'gemma4:e4b', description: 'Gemma 4 E4B · 6.6–9.5 GB · modest local systems' },
 ];
 
-const themes: { value: Preferences['theme']; label: string; appearance: string; mode: 'light' | 'dark' }[] = [
+  const themes: { value: Preferences['theme']; label: string; appearance: string; mode: 'light' | 'dark' }[] = [
   { value: 'latte', label: 'Latte', appearance: 'Light', mode: 'light' },
   { value: 'frappe', label: 'Frappé', appearance: 'Soft dark', mode: 'dark' },
   { value: 'macchiato', label: 'Macchiato', appearance: 'Medium dark', mode: 'dark' },
@@ -295,20 +299,26 @@ function App() {
   const [allocations, setAllocations] = useState<AllocationBucket[]>([]);
   const [sources, setSources] = useState<SourceStatusItem[]>([]);
   const [tokenStatus, setTokenStatus] = useState<TokenStatus | null>(null);
+  const [kiteApiKey, setKiteApiKey] = useState('');
+  const [kiteApiSecret, setKiteApiSecret] = useState('');
+  const [kiteLoginUrl, setKiteLoginUrl] = useState('');
+  const [kiteTokenBusy, setKiteTokenBusy] = useState(false);
+  const [kiteTokenNotice, setKiteTokenNotice] = useState('');
   const [preferences, setPreferences] = useState<Preferences | null>(null);
   const [themeSaving, setThemeSaving] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [ollamaModels, setOllamaModels] = useState<{ name: string; size: string | null }[]>([]);
   const [modelStatus, setModelStatus] = useState('');
-  const [aiReview, setAiReview] = useState<AIReport | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [newsItems, setNewsItems] = useState<NewsItem[]>([]);
-  const [newsReport, setNewsReport] = useState<AIReport | null>(null);
   const [reportArchive, setReportArchive] = useState<AIReportSummary[]>([]);
   const [selectedSavedReport, setSelectedSavedReport] = useState<AIReport | null>(null);
   const [reportArchiveLoading, setReportArchiveLoading] = useState(false);
   const [newsLoading, setNewsLoading] = useState(false);
-  const [newsReportLoading, setNewsReportLoading] = useState(false);
+  const [latestGeneratedReport, setLatestGeneratedReport] = useState<AIReport | null>(null);
+  const [reportExpanded, setReportExpanded] = useState(true);
+  const [aiTab, setAiTab] = useState<AISectionTab>('portfolio');
+  const [fontScale, setFontScale] = useState<'normal' | 'large'>(() => localStorage.getItem('portfolio-font-scale') === 'large' ? 'large' : 'normal');
   const [glossarySearch, setGlossarySearch] = useState('');
   const [manualPositions, setManualPositions] = useState<ManualPosition[]>([]);
   const [selectedManualIds, setSelectedManualIds] = useState<string[]>([]);
@@ -328,6 +338,7 @@ function App() {
   const today = new Intl.DateTimeFormat('en-IN', {
     weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
   }).format(new Date()).toUpperCase();
+  const kiteRedirectUrl = `${window.location.origin}/`;
   const displayHoldings = activeSection === 'Overview' ? holdings.slice(0, 5) : holdings;
   const filteredGlossary = glossaryTerms.filter((item) =>
     `${item.term} ${item.definition}`.toLowerCase().includes(glossarySearch.toLowerCase()),
@@ -410,7 +421,7 @@ function App() {
     { id: 'quantity', header: 'Quantity', sortValue: row => row.quantity, cell: row => formatCompact(row.quantity) },
     { id: 'price', header: 'Price', sortValue: row => row.last_price, cell: row => <span className="table-detail-cell" title={`Price date: ${formatDate(row.price_as_of)}`}>{formatCurrency(row.last_price, row.currency)}<small>{row.price_source ?? row.source} · {formatDate(row.price_as_of)}</small></span> },
     { id: 'value', header: 'Market value', sortValue: row => row.value, cell: row => formatCurrency(row.value, row.currency) },
-    { id: 'pnl', header: 'P&L', sortValue: row => row.pnl, cell: row => formatCurrency(row.pnl, row.currency) },
+    { id: 'pnl', header: 'P&L', sortValue: row => row.pnl, cell: row => { const pnl = row.pnl; const tone = pnl == null || pnl === 0 ? 'neutral' : pnl > 0 ? 'profit' : 'loss'; const intensity = pnl == null || pnl === 0 ? 0 : Math.min(1, Math.abs(pnl) / Math.max(Math.abs(row.value ?? 0) * .25, 1)); return <span className={`pnl-heat pnl-heat-${tone}`} style={{ '--heat': intensity } as React.CSSProperties} title={pnl == null ? 'P&L unavailable' : `${pnl > 0 ? 'Profit' : pnl < 0 ? 'Loss' : 'Neutral'}: ${formatCurrency(pnl, row.currency)}`}><span className="pnl-heat-dot" aria-hidden="true"/>{formatCurrency(pnl, row.currency)}</span> } },
   ];
   const sipColumns: DataTableColumn<SipRow>[] = [
     { id: 'fund', header: 'Fund', sortValue: row => row.scheme_name, cell: row => <strong className="table-primary-cell">{row.scheme_name}</strong> },
@@ -782,6 +793,50 @@ function App() {
     }
   }
 
+  async function loadKiteCredentials() {
+    try {
+      const response = await fetch('/api/token/credentials');
+      if (!response.ok) throw new Error('Stored Kite credentials could not be loaded.');
+      const payload = await response.json() as { api_key?: string; api_secret?: string; configured?: boolean };
+      setKiteApiKey(payload.api_key ?? '');
+      setKiteApiSecret(payload.api_secret ?? '');
+      if (payload.configured) await createKiteLoginUrl(payload.api_key ?? '');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Stored Kite credentials could not be loaded.');
+    }
+  }
+
+  async function persistKiteCredentials() {
+    try {
+      const response = await fetch('/api/token/credentials', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ api_key: kiteApiKey, api_secret: kiteApiSecret }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Kite credentials could not be saved.');
+      addToast('Kite API key and secret saved locally.');
+      await createKiteLoginUrl();
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Kite credentials could not be saved.'); }
+  }
+
+  async function createKiteLoginUrl(apiKey = kiteApiKey) {
+    setKiteTokenBusy(true);
+    setKiteTokenNotice('');
+    try {
+      const response = await fetch('/api/token/login-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: apiKey }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.detail || 'Kite login URL could not be created.');
+      setKiteLoginUrl(payload.login_url as string);
+      setKiteTokenNotice('Login URL ready. Confirm the redirect URL below matches the Kite Developer Console, then sign in to Zerodha.');
+      addToast('Kite login URL is ready.');
+    } catch (error) {
+      setKiteTokenNotice(error instanceof Error ? error.message : 'Kite login URL could not be created.');
+    } finally {
+      setKiteTokenBusy(false);
+    }
+  }
+
   async function loadPreferences(): Promise<Preferences | null> {
     try {
       const response = await fetch('/api/preferences');
@@ -893,19 +948,20 @@ function App() {
     }
   }
 
-  async function generateAIReview() {
-    const progressToast = addToast('Generating a local portfolio review…', 'progress', 'Generating a local portfolio review');
+  async function generateTypedReport(type: AISectionTab, endpoint?: string) {
+    const progressToast = addToast(`Generating ${reportTypeLabel(type).toLowerCase()}…`, 'progress', 'Generating a local AI report');
     setAiLoading(true);
     try {
-      const response = await fetch('/api/ai/recommendations', { method: 'POST' });
+      const response = await fetch(endpoint ?? `/api/ai/${type}-report`, { method: 'POST' });
       const payload = await response.json();
-      if (!response.ok) throw new Error(payload.detail || 'Local portfolio review failed.');
-      setAiReview(payload as AIReport);
+      if (!response.ok) throw new Error(payload.detail || 'Local AI report failed.');
+      setLatestGeneratedReport(payload as AIReport);
+      setReportExpanded(true);
       setSelectedSavedReport(null);
-      await loadReportArchive('portfolio');
-      setNotice('Local portfolio review generated.');
+      await loadReportArchive(type);
+      setNotice(`${reportTypeLabel(type)} generated and saved.`);
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'Local portfolio review failed.');
+      setNotice(error instanceof Error ? error.message : 'Local AI report failed.');
     } finally {
       dismissToast(progressToast);
       setAiLoading(false);
@@ -955,7 +1011,9 @@ function App() {
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.detail || 'Yahoo Finance news refresh failed.');
       await loadPortfolioNews();
-      setNewsReport(null);
+      setLatestGeneratedReport(null);
+      localStorage.setItem('portfolio-news-last-check', String(Date.now()));
+      sessionStorage.removeItem('portfolio-news-reminder-shown');
       setNotice(payload.message || 'Portfolio news refreshed.');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Portfolio news refresh failed.');
@@ -964,35 +1022,82 @@ function App() {
     }
   }
 
-  async function generateAINewsReport() {
-    const progressToast = addToast('Writing a local AI news report…', 'progress', 'Writing a local AI news report');
-    setNewsReportLoading(true);
-    try {
-      const response = await fetch('/api/ai/news-report', { method: 'POST' });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.detail || 'News report generation failed.');
-      setNewsReport(payload as AIReport);
-      setSelectedSavedReport(null);
-      await loadReportArchive('news');
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : 'News report generation failed.');
-    } finally {
-      dismissToast(progressToast);
-      setNewsReportLoading(false);
-    }
-  }
-
   useEffect(() => { void syncPortfolio(false); }, []);
+  const tokenExchangeStarted = useRef(false);
+  const kiteCredentialsLoaded = useRef(false);
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const tokenSetup = params.get('token_setup');
+    if (tokenSetup) {
+      const success = tokenSetup === 'success';
+      addToast(success ? 'Zerodha access token saved.' : params.get('reason') || 'Zerodha token setup failed.', success ? 'default' : 'destructive');
+      if (success) void loadTokenStatus();
+      navigate({ pathname: location.pathname }, { replace: true });
+      return;
+    }
+    const requestToken = params.get('request_token');
+    const isKiteCallback = Boolean(requestToken || params.has('action') || params.has('type') || params.has('status'));
+    if (!isKiteCallback) return;
+    if (requestToken) {
+      if (tokenExchangeStarted.current) return;
+      tokenExchangeStarted.current = true;
+      addToast('Zerodha redirected successfully. Saving the new access token…', 'progress', 'Exchanging the short-lived Kite request token');
+      void (async () => {
+        try {
+          const body = new URLSearchParams({ request_token: requestToken });
+          const response = await fetch('/api/token/exchange', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body });
+          if (!response.ok) { const payload = await response.json(); throw new Error(payload.detail || 'Token exchange failed.'); }
+          addToast('Zerodha access token saved. It will need renewal after it expires.');
+          await loadTokenStatus();
+        } catch (error) { setNotice(error instanceof Error ? error.message : 'Zerodha token exchange failed.'); }
+        finally { navigate({ pathname: location.pathname }, { replace: true }); }
+      })();
+    } else {
+      const message = params.get('message') || params.get('error_description') || params.get('error');
+      const loginError = message?.toLowerCase().includes('user is not enabled for the app')
+        ? 'Kite did not enable the account signed into the browser for this app. Check that the app Client ID matches the account, sign out of any other Kite account, and retry. Personal app market-data limits are unrelated.'
+        : message ? `Zerodha login did not complete: ${message}` : 'Zerodha login did not return a request token. Create a fresh login URL and try again.';
+      setKiteTokenNotice(loginError);
+      addToast(loginError, 'destructive');
+      navigate({ pathname: location.pathname }, { replace: true });
+    }
+  }, [location.pathname, location.search, navigate]);
   useEffect(() => {
     if (preferences?.theme) document.documentElement.dataset.theme = preferences.theme;
   }, [preferences?.theme]);
   useEffect(() => {
+    document.documentElement.dataset.fontScale = fontScale;
+    localStorage.setItem('portfolio-font-scale', fontScale);
+  }, [fontScale]);
+  useEffect(() => {
+    if (!preferences) void loadPreferences();
+  }, []);
+  useEffect(() => {
+    const key = 'portfolio-news-last-check';
+    const remind = () => {
+      const last = Number(localStorage.getItem(key) || 0);
+      if (last && Date.now() - last >= 4 * 60 * 60 * 1000 && !sessionStorage.getItem('portfolio-news-reminder-shown')) {
+        addToast('It has been 4 hours since your last news check. Review the latest market stories.');
+        sessionStorage.setItem('portfolio-news-reminder-shown', '1');
+      }
+    };
+    const timer = window.setInterval(remind, 60_000);
+    remind();
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
     if (activeSection === 'Settings' && !preferences) void loadPreferences();
     if (activeSection === 'Manual portfolio') void loadManualPortfolio();
+    if (activeSection === 'Settings') {
+      void loadTokenStatus();
+      if (!kiteCredentialsLoaded.current) { kiteCredentialsLoaded.current = true; void loadKiteCredentials(); }
+    }
     if (activeSection === 'News & reports') void loadPortfolioNews();
-    if (activeSection === 'AI insights') void loadReportArchive('portfolio');
-    if (activeSection === 'News & reports') void loadReportArchive('news');
-  }, [activeSection]);
+    if (activeSection === 'AI insights') {
+      void loadReportArchive(aiTab);
+      if (aiTab === 'news' || aiTab === 'ideas') void loadPortfolioNews();
+    }
+  }, [activeSection, aiTab]);
   useEffect(() => {
     if (navigationBlocker.state !== 'blocked') return;
     void askForConfirmation({
@@ -1010,9 +1115,8 @@ function App() {
 
   function renderReportArchive(type: ReportType) {
     return <section className="panel report-archive">
-      <div className="panel-heading"><div><h2>Saved {type === 'portfolio' ? 'portfolio reviews' : 'news reports'}</h2><p className="section-subtitle">Generated reports are stored locally in SQLite.</p></div><Button variant="outline" disabled={reportArchiveLoading} onClick={() => void loadReportArchive(type)}><RefreshCw size={14} className={reportArchiveLoading ? 'spin' : ''}/> Refresh</Button></div>
-      {reportArchive.length === 0 ? <Empty title={reportArchiveLoading ? 'Loading saved reports' : 'No saved reports yet'} description={reportArchiveLoading ? 'Checking the local report archive…' : 'Generate an AI report to save it here for later review.'} /> : <div className="report-archive-list">{reportArchive.map(report => <Button variant="ghost" key={report.report_id} className={`report-archive-item ${selectedSavedReport?.report_id === report.report_id ? 'selected' : ''}`} onClick={() => void openSavedReport(report.report_id)}><span><strong>{reportTypeLabel(report.report_type)}</strong><small>{formatDate(report.saved_at)} · {report.model}</small></span><span className="report-open-label">Open report <ArrowUpRight size={14}/></span></Button>)}</div>}
-      {selectedSavedReport?.report_type === type && <article className="saved-report-view"><div className="panel-heading"><div><h3>{reportTypeLabel(type)} · {selectedSavedReport.model}</h3><p className="section-subtitle">Saved {formatDate(selectedSavedReport.saved_at)} · {selectedSavedReport.scope}</p></div><Button variant="outline" onClick={() => exportMarkdownReport(selectedSavedReport)}><Download size={14}/> Export Markdown</Button></div><Markdown source={selectedSavedReport.markdown}/></article>}
+      <div className="panel-heading"><div><h2>Saved runs</h2><p className="section-subtitle">{reportArchive.length} {reportArchive.length === 1 ? 'report' : 'reports'} · stored in local SQLite</p></div><Button variant="ghost" aria-label="Refresh saved reports" disabled={reportArchiveLoading} onClick={() => void loadReportArchive(type)}><RefreshCw size={14} className={reportArchiveLoading ? 'spin' : ''}/></Button></div>
+      {reportArchive.length === 0 ? <Empty title={reportArchiveLoading ? 'Loading saved reports' : 'No saved runs yet'} description={reportArchiveLoading ? 'Checking the local report archive…' : 'Your generated reports will appear here.'} /> : <div className="report-archive-list">{reportArchive.map(report => <article className={`report-archive-item ${selectedSavedReport?.report_id === report.report_id ? 'selected' : ''}`} key={report.report_id}><div className="report-archive-copy"><strong>{reportTypeLabel(report.report_type)}</strong><span>{formatDate(report.saved_at)} <i aria-hidden="true">·</i> {report.model}</span><small>{String(report.metadata?.portfolio_row_count ?? 0)} holdings <i aria-hidden="true">·</i> {String(report.metadata?.news_article_count ?? 0)} stories</small></div><Button variant="outline" onClick={() => void openSavedReport(report.report_id)} aria-label={`Open ${reportTypeLabel(report.report_type)} from ${formatDate(report.saved_at)}`}>{selectedSavedReport?.report_id === report.report_id ? 'Opened' : 'Open'}</Button></article>)}</div>}
     </section>;
   }
 
@@ -1052,8 +1156,9 @@ function App() {
           <Button variant="ghost" className="mobile-menu icon-button" aria-label="Open navigation" aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(true)}><Menu size={19} /></Button>
           <div className="breadcrumb"><span>Portfolio</span><span className="slash">/</span><strong>{activeSection}</strong></div>
           <div className="top-actions">
-            {(aiLoading || newsReportLoading) && <div className="ai-progress" role="status" aria-live="polite" aria-atomic="true"><span className="ai-progress-label">{newsReportLoading ? 'Writing news report' : 'Reviewing portfolio'}</span><Progress label={newsReportLoading ? 'Writing a local AI news report' : 'Generating a local portfolio review'} /></div>}
-            <label className="top-theme-control"><Palette size={15} aria-hidden="true"/><Select aria-label="Color theme" value={preferences?.theme ?? 'latte'} disabled={!preferences || themeSaving} onChange={event => void saveThemePreference(event.target.value as Preferences['theme'])}><optgroup label="Light themes">{themes.filter(theme => theme.mode === 'light').map(theme => <option key={theme.value} value={theme.value}>{theme.label}</option>)}</optgroup><optgroup label="Dark themes">{themes.filter(theme => theme.mode === 'dark').map(theme => <option key={theme.value} value={theme.value}>{theme.label}</option>)}</optgroup></Select></label>
+            {aiLoading && <div className="ai-progress" role="status" aria-live="polite" aria-atomic="true"><span className="ai-progress-label">Generating AI report</span><Progress label="Generating a local AI report" /></div>}
+            <div className="accessibility-control" role="group" aria-label="Text size"><Type size={15} aria-hidden="true"/><Button variant="ghost" aria-label="Decrease text size" title="Decrease text size" disabled={fontScale==='normal'} onClick={()=>setFontScale('normal')}>A−</Button><Button variant="ghost" aria-label="Increase text size" title="Increase text size" aria-pressed={fontScale==='large'} disabled={fontScale==='large'} onClick={()=>setFontScale('large')}>A+</Button></div>
+            <details className="top-theme-menu"><summary aria-label={`Theme: ${themes.find(theme=>theme.value===preferences?.theme)?.label ?? 'Latte'}`}><Palette size={16}/><span>{themes.find(theme=>theme.value===preferences?.theme)?.label ?? 'Theme'}</span></summary><div className="top-theme-options" role="group" aria-label="Choose color theme"><p>Appearance</p>{themes.map(theme=><Button key={theme.value} variant="ghost" aria-pressed={preferences?.theme===theme.value} onClick={()=>void saveThemePreference(theme.value)} disabled={!preferences||themeSaving}><span className={`theme-swatch theme-${theme.value}`} aria-hidden="true"/>{theme.label}<small>{theme.appearance}</small>{preferences?.theme===theme.value&&<Check size={14}/>}</Button>)}</div></details>
             <span className="local-pill" title="Local API connection status"><span className={`status-dot ${apiHealth}`} />{apiHealth === 'connected' ? 'LOCAL API' : apiHealth === 'checking' ? 'CONNECTING' : 'API OFFLINE'}</span><Button variant="ghost" className="icon-button" aria-label="Open settings" onClick={() => openSection('Settings')}><Settings2 size={18} /></Button>
           </div>
         </header>
@@ -1085,6 +1190,16 @@ function App() {
           </section>}
           {activeSection === 'Settings' && <section className="settings-page">
             <div className="welcome-row"><div><p className="overline">LOCAL PREFERENCES</p><h1>Make it <em>yours.</em></h1><p className="welcome-copy">Saved in this app’s SQLite database on your device.</p></div><Button onClick={() => void saveSettings()} disabled={!preferences || settingsSaving || themeSaving}>{settingsSaving ? 'Saving…' : 'Save preferences'}</Button></div>
+            <section className="panel settings-panel zerodha-setup-panel"><div className="panel-heading"><div><h2 className="heading-with-provider"><ZerodhaMark/>Zerodha connection</h2><p className="section-subtitle">Create and save the daily read-only Kite access token from this app.</p></div><Badge variant={tokenStatus?.configured ? 'success' : tokenStatus ? 'outline' : 'secondary'}>{tokenStatus?.configured ? 'Token saved' : tokenStatus ? 'Setup required' : 'Checking status'}</Badge></div>
+              {kiteTokenNotice && <Alert variant={/failed|error|expired|not enable|did not|does not|could not|invalid/i.test(kiteTokenNotice) ? 'destructive' : 'default'}><AlertDescription>{kiteTokenNotice}</AlertDescription></Alert>}
+              {tokenStatus?.configured && <p className="section-subtitle">A token is saved in the local secret store. Kite access tokens expire daily; replace it after the next login.</p>}
+              <div className="zerodha-token-form"><div className="settings-fields zerodha-token-fields"><Field label="Kite API key"><Input required type="password" autoComplete="new-password" value={kiteApiKey} onChange={event => { setKiteApiKey(event.target.value); setKiteLoginUrl(''); }} onCopy={event=>event.preventDefault()} onCut={event=>event.preventDefault()} onContextMenu={event=>event.preventDefault()} placeholder="Kite API key" /></Field><Field label="Kite API secret"><Input required type="password" autoComplete="new-password" value={kiteApiSecret} onChange={event => setKiteApiSecret(event.target.value)} onCopy={event=>event.preventDefault()} onCut={event=>event.preventDefault()} onContextMenu={event=>event.preventDefault()} placeholder="Kite API secret" /></Field></div>
+                <div className="zerodha-token-actions"><Button type="button" onClick={() => void persistKiteCredentials()} disabled={!kiteApiKey.trim() || !kiteApiSecret.trim() || kiteTokenBusy}><Check size={14}/>Save credentials</Button>{kiteLoginUrl && <Button type="button" asChild variant="outline"><a href={kiteLoginUrl} target="_blank" rel="noreferrer"><ZerodhaMark/>Continue to Zerodha <ExternalLink size={14}/></a></Button>}</div>
+                {kiteLoginUrl && <a className="kite-login-url" href={kiteLoginUrl} target="_blank" rel="noreferrer">{kiteLoginUrl}</a>}
+              </div>
+              <div className="kite-redirect-row"><span><strong>Redirect URL registered with Kite</strong><code>{kiteRedirectUrl}</code></span><Button variant="ghost" aria-label="Copy redirect URL" onClick={() => void navigator.clipboard.writeText(kiteRedirectUrl).then(() => setNotice('Redirect URL copied.')).catch(() => setKiteTokenNotice('Clipboard access is unavailable. Copy the redirect URL shown above.'))}><Copy size={15}/> Copy</Button></div>
+              <Collapsible title="Setup and troubleshooting instructions"><ol className="kite-setup-steps"><li>In the <a href="https://developers.kite.trade/" target="_blank" rel="noreferrer">Kite Developer Console</a>, set the app Redirect URL to the exact value shown above, including host, port, and trailing slash.</li><li>Save your API key and secret once. The login URL is then generated and displayed automatically.</li><li>Complete Zerodha sign-in and 2FA. On return, this page exchanges the request token and saves the new expiring access token automatically.</li></ol><Alert variant="warning"><AlertTitle>“The user is not enabled for the app”</AlertTitle><AlertDescription>Confirm that the Developer Console Client ID exactly matches the signed-in account. Sign out of other Zerodha accounts in the browser and retry with the linked account.</AlertDescription></Alert><p className="section-subtitle">API key and secret are stored in the app’s local secret store and prefilled here. The access token expires and must be renewed by signing in again.</p></Collapsible>
+            </section>
             {!preferences ? <div className="panel">Loading saved preferences…</div> : <>
               <section className="panel settings-panel"><div className="panel-heading"><div><h2>Portfolio display & sync</h2><p className="section-subtitle">Choose what appears and which sources refresh.</p></div></div>
                 <label className="setting-row"><span><strong>Show manual positions</strong><small>Include the separate manual ledger and CSV imports in totals, holdings, and allocations.</small></span><Switch checked={preferences.show_manual_imports} onChange={e => updatePreference('show_manual_imports', e.target.checked)} /></label>
@@ -1110,19 +1225,19 @@ function App() {
 
           {activeSection === 'Glossary' && <section><div className="welcome-row"><div><p className="overline">PLAIN LANGUAGE</p><h1>Portfolio <em>glossary.</em></h1><p className="welcome-copy">Short definitions for the numbers and terms in this dashboard.</p></div></div><label className="glossary-search"><Search size={17}/><Input aria-label="Search glossary" placeholder="Search terms" value={glossarySearch} onChange={e => setGlossarySearch(e.target.value)}/></label><div className="glossary-grid">{filteredGlossary.map(item => <article className="panel glossary-card" key={item.term}><h2>{item.term}</h2><p>{item.definition}</p></article>)}</div></section>}
 
-          {activeSection === 'AI insights' && <section><div className="welcome-row"><div><p className="overline">LOCAL MODEL · OLLAMA</p><h1>Portfolio <em>analysis.</em></h1><p className="welcome-copy">A sourced Markdown review of portfolio composition, available news, concentration, and data gaps.</p></div><Button variant="ai" onClick={() => void generateAIReview()} disabled={aiLoading || !preferences?.ollama_enabled}>{aiLoading ? 'Reviewing…' : 'Generate review'}</Button></div>
-            {!preferences?.ollama_enabled && <Alert><AlertTitle>Local AI is turned off</AlertTitle><AlertDescription>Choose an Ollama endpoint and model, then enable AI portfolio reviews.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Configure Ollama</Button></Alert>}
-            {aiReview && <article className="panel ai-summary"><div className="panel-heading"><div><h2>Portfolio analysis · {aiReview.model}</h2><p className="section-subtitle">Generated {formatDate(aiReview.generated_at)} · {aiReview.scope}</p></div><Button variant="outline" onClick={() => exportMarkdownReport(aiReview)}><Download size={14}/> Export Markdown</Button></div><Markdown source={aiReview.markdown} /></article>}
-            <p className="ai-disclaimer">The equal-weight quantities are an illustrative rebalance scenario, not personalized targets or orders. Review price dates, goals, risk tolerance, liquidity, taxes, and fees before making decisions.</p>
-            {renderReportArchive('portfolio')}
+          {activeSection === 'AI insights' && <section><div className="welcome-row"><div><p className="overline">LOCAL MODEL · OLLAMA</p><h1>AI <em>command centre.</em></h1><p className="welcome-copy">Choose a research lens, generate a sourced report, then revisit its saved run and metadata.</p></div></div>
+            {!preferences?.ollama_enabled && <Alert><AlertTitle>Local AI is turned off</AlertTitle><AlertDescription>Choose an Ollama endpoint and model, then enable local reports in Settings.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Configure Ollama</Button></Alert>}
+            <Tabs value={aiTab} onValueChange={value=>setAiTab(value as AISectionTab)} className="ai-tabs"><TabsList aria-label="AI report types"><TabsTrigger value="portfolio">Portfolio</TabsTrigger><TabsTrigger value="news">News</TabsTrigger><TabsTrigger value="ideas">Stock & fund ideas</TabsTrigger><TabsTrigger value="risk">Risk</TabsTrigger><TabsTrigger value="diversification">Diversification</TabsTrigger><TabsTrigger value="funds">Fund & ETF</TabsTrigger></TabsList>
+            <TabsContent value={aiTab} className="ai-tab-content"><section className="panel ai-report-workspace"><div className="panel-heading"><div><h2>{reportTypeLabel(aiTab)}</h2><p className="section-subtitle">{aiTab==='news' ? 'Refresh coverage and summarize portfolio-linked stories.' : aiTab==='ideas' ? 'Discover candidates and themes from broader market news.' : aiTab==='risk' ? 'Review concentration, data quality, liquidity caveats, and portfolio risks.' : aiTab==='diversification' ? 'Inspect overlap and diversification gaps from the current holdings snapshot.' : aiTab==='funds' ? 'Research fund and ETF categories, overlap, fees and due diligence gaps from available evidence.' : 'Review portfolio structure, holdings, data quality, and watchpoints.'}</p></div><div className="ai-report-actions">{(aiTab==='news'||aiTab==='ideas')&&<Button variant="outline" disabled={newsLoading||!preferences||(!preferences.rss_news_enabled&&!(preferences.yahoo_news_enabled&&preferences.yahoo_terms_confirmed))} onClick={()=>void syncPortfolioNews()}><RefreshCw size={14} className={newsLoading?'spin':''}/>{newsLoading?'Refreshing…':'Refresh news'}</Button>}<Button variant="ai" disabled={aiLoading||!preferences?.ollama_enabled||(aiTab==='news'&&!newsItems.length)} onClick={()=>void generateTypedReport(aiTab,aiTab==='portfolio'?'/api/ai/recommendations':aiTab==='news'?'/api/ai/news-report':undefined)}><Bot size={14}/>{aiLoading?'Generating…':'Generate report'}</Button></div></div>
+              {aiTab==='news'&&<div className="news-list ai-news-brief">{newsItems.slice(0,8).map(article=><article className="news-card" key={article.id}><div className="news-card-meta"><span>{article.related_tickers?.join(', ')||article.ticker}</span><span>{article.publisher||'News source'}</span><time>{formatDate(article.published_at)}</time></div><h3>{article.url?<a href={article.url} target="_blank" rel="noreferrer">{article.title} <ExternalLink size={13}/></a>:article.title}</h3></article>)}{newsItems.length===0&&<Empty title="No saved market stories" description="Refresh news to populate this report’s evidence base."/>}</div>}
+              {(selectedSavedReport?.report_type===aiTab||latestGeneratedReport?.report_type===aiTab)&&<article className="saved-report-view"><div className="panel-heading"><div><p className="overline">{selectedSavedReport?.report_type===aiTab?'SAVED RUN':'LATEST RUN'}</p><h3>{reportTypeLabel(aiTab)} · {(selectedSavedReport?.report_type===aiTab?selectedSavedReport:latestGeneratedReport)?.model}</h3><p className="section-subtitle">Saved {formatDate((selectedSavedReport?.report_type===aiTab?selectedSavedReport:latestGeneratedReport)?.saved_at ?? null)} · {(selectedSavedReport?.report_type===aiTab?selectedSavedReport:latestGeneratedReport)?.scope}</p></div><div className="ai-report-actions"><Button variant="outline" onClick={()=>setReportExpanded(value=>!value)}>{reportExpanded?'Collapse':'Read report'}</Button><Button variant="outline" onClick={()=>exportMarkdownReport((selectedSavedReport?.report_type===aiTab?selectedSavedReport:latestGeneratedReport)!)}><Download size={14}/> Export</Button></div></div>{reportExpanded&&<Markdown source={(selectedSavedReport?.report_type===aiTab?selectedSavedReport:latestGeneratedReport)!.markdown}/>}</article>}
+      <details className="saved-runs-disclosure"><summary>Saved runs <span>{reportArchive.length}</span></summary>{renderReportArchive(aiTab)}</details>
+            </section><p className="ai-disclaimer">Reports are saved locally with source counts, snapshot timing, and run-specific metadata. Treat AI output as research support, not personalized investment advice.</p></TabsContent></Tabs>
           </section>}
 
-          {activeSection === 'News & reports' && <section className="news-page"><div className="welcome-row"><div><p className="overline">PORTFOLIO COVERAGE</p><h1>News & <em>reports.</em></h1><p className="welcome-copy">Cached per-holding Yahoo Finance headlines and market RSS stories matched to holdings. Refresh checks each source cache before fetching again.</p></div><div className="manual-actions"><Button variant="outline" disabled={newsLoading || !preferences || (!preferences.rss_news_enabled && !(preferences.yahoo_news_enabled && preferences.yahoo_terms_confirmed))} onClick={() => void syncPortfolioNews()}><RefreshCw size={15} className={newsLoading ? 'spin' : ''}/>{newsLoading ? 'Refreshing…' : 'Refresh headlines'}</Button><Button variant="ai" disabled={newsReportLoading || !preferences?.ollama_enabled || !newsItems.length} onClick={() => void generateAINewsReport()}><Bot size={15}/>{newsReportLoading ? 'Writing report…' : 'Write local AI report'}</Button></div></div>
+          {activeSection === 'News & reports' && <section className="news-page"><div className="welcome-row"><div><p className="overline">PORTFOLIO COVERAGE</p><h1>Market <em>news.</em></h1><p className="welcome-copy">Cached per-holding Yahoo Finance headlines and market RSS stories matched to holdings. AI research reports live in the AI insights command centre.</p></div><Button variant="outline" onClick={()=>openSection('AI insights')}>Open AI insights</Button></div>
             {preferences && !preferences.rss_news_enabled && !preferences.yahoo_news_enabled && <Alert><AlertTitle>No news sources enabled</AlertTitle><AlertDescription>Enable market RSS feeds or Yahoo portfolio headlines in Settings. Yahoo access also requires its permission confirmation.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Configure news</Button></Alert>}
             {preferences?.yahoo_news_enabled && !preferences.yahoo_terms_confirmed && !preferences.rss_news_enabled && <Alert variant="warning"><AlertTitle>Yahoo access needs confirmation</AlertTitle><AlertDescription>Confirm Yahoo portfolio headline access in Settings, or enable market RSS feeds independently.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Review news settings</Button></Alert>}
-            {newsReport && <section className="panel news-ai-report"><div className="panel-heading"><div><h2>AI news report</h2><p className="section-subtitle">Generated locally with {newsReport.model} · {formatDate(newsReport.generated_at)}</p></div><Button variant="outline" onClick={() => exportMarkdownReport(newsReport)}><Download size={14}/> Export Markdown</Button></div><Markdown source={newsReport.markdown} /><small>{newsReport.scope}</small></section>}
-            {!preferences?.ollama_enabled && <Alert><AlertTitle>Local AI reports are turned off</AlertTitle><AlertDescription>Enable Ollama in Settings to write a report from the saved headlines.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Configure Ollama</Button></Alert>}
-            {renderReportArchive('news')}
             <div className="news-list">{newsItems.length === 0 ? <Card className="news-empty"><Empty icon={<Newspaper size={23}/>} title={newsLoading ? 'Refreshing headlines' : 'No saved headlines in this window'} description={newsLoading ? 'Checking enabled sources for updates…' : 'Enable a news source in Settings, then refresh to load stories relevant to your holdings.'} action={!newsLoading && <Button variant="outline" onClick={() => openSection('Settings')}>Open news settings</Button>} /></Card> : newsItems.map(article => <article className="panel news-card" key={article.id}><div className="news-card-meta"><span>{article.related_tickers?.join(', ') || article.ticker}</span><span>{article.publisher || 'News source'}</span><time>{formatDate(article.published_at)}</time></div><h2>{article.url ? <a href={article.url} target="_blank" rel="noreferrer">{article.title} <ExternalLink size={13}/></a> : article.title}</h2>{article.summary && <p>{article.summary}</p>}<small>{article.instrument_name} · {article.asset_type} · fetched {formatDate(article.fetched_at)}</small></article>)}</div>
           </section>}
 
@@ -1138,7 +1253,7 @@ function App() {
           </section>
 
           {apiHealth === 'unavailable' && <Alert variant="destructive"><AlertTitle>Local API is offline</AlertTitle><AlertDescription>Start the backend with <code>make api</code>, then refresh this page. Saved portfolio data is not deleted when the API is unavailable.</AlertDescription></Alert>}
-          {tokenStatus && !tokenStatus.configured && <Alert><AlertTitle>Connect Zerodha</AlertTitle><AlertDescription>{tokenStatus.message} Open the local login setup with <code>make token-ui</code> to save a fresh access token.</AlertDescription></Alert>}
+          {tokenStatus && !tokenStatus.configured && <Alert><AlertTitle>Connect Zerodha</AlertTitle><AlertDescription>{tokenStatus.message} Save a fresh Kite access token in Settings before syncing your account.</AlertDescription><Button variant="outline" onClick={() => openSection('Settings')}>Open Zerodha setup</Button></Alert>}
 
           <section aria-labelledby="summary-heading">
             <div className="section-title-row"><div><h2 id="summary-heading">Portfolio overview</h2><p className="section-subtitle">Your investment snapshot at a glance</p></div><Button variant="ghost" onClick={() => void syncPortfolio()} disabled={refreshing}><RefreshCw size={15} className={refreshing ? 'spin' : ''} />{refreshing ? 'Syncing…' : 'Refresh'}</Button></div>

@@ -13,7 +13,7 @@ Zerodha's forum announcement describes Personal as giving free access to persona
 3. Enter an app name, your Zerodha Client ID, and the exact local redirect URL:
 
    ```text
-   http://127.0.0.1:8501
+   http://127.0.0.1:5173/
    ```
 
    **Use the alphanumeric Zerodha Client ID for the account that will authorize
@@ -32,17 +32,17 @@ Zerodha's forum announcement describes Personal as giving free access to persona
    make setup
    ```
 
-2. Start the local token setup page:
+2. Start the local backend and React app in separate terminals:
 
    ```sh
-   make token-ui
+   make api
+   make web
    ```
 
-3. Open <http://127.0.0.1:8501>, enter the API key, and open the generated Kite login URL.
-4. Sign in to Zerodha and complete the account's 2FA. On successful login Kite redirects to the local Streamlit page with `request_token` in the URL. The page captures it into the masked form field and immediately removes the query string from the address bar.
-5. Enter the API secret and select **Generate token and save locally**. The helper exchanges the short-lived request token through the official `kiteconnect` Python SDK and stores the access token locally. The UI reports success without displaying the full access token.
+3. Open <http://127.0.0.1:5173> and go to **Settings → Zerodha connection**. Save your API key and secret once; they are stored in the local secret store and prefilled on future visits. The Kite login URL is generated and displayed automatically. Set the redirect URL in the Developer Console to the exact URL shown in Settings.
+4. Select **Continue to Zerodha**, sign in, and complete 2FA. When Kite redirects back with `request_token`, the dashboard automatically exchanges it with the local API, saves the expiring access token, shows a toast, and removes the query string from the address bar.
 
-The redirect must return to the same local address and port used by Streamlit (`http://127.0.0.1:8501` by default). If the token field is not filled after login, check that the app's configured redirect URL matches this address exactly, then restart the login flow with a fresh request token.
+The redirect must exactly match the React app URL shown in Settings (normally `http://127.0.0.1:5173/`). If the token field is not filled after login, check that the app's configured redirect URL matches the active host and port, then start a fresh login flow. Do not reuse an old request token.
 
 Kite's request token is short-lived and should be exchanged promptly. The access token normally expires at 6:00 AM the following day, so expect to complete this login flow daily. The app must show a clear reauthentication state when the token expires or is invalidated.
 
@@ -76,7 +76,7 @@ access token.
 
 ## Current implementation/security status
 
-The Streamlit helper stores the API key and access token through the local secret-store layer, separate from the portfolio rows. Treat the files under `backend/data/` as sensitive: keep them local and out of backups or sync services you do not trust. Docker Compose mounts this directory into the API container so the API can read the saved token and retain local portfolio snapshots.
+The React setup page stores the API key and access token through the local secret-store layer, separate from the portfolio rows. Treat the files under `backend/data/` as sensitive: keep them local and out of backups or sync services you do not trust. Docker Compose mounts this directory into the API container so the API can read the saved token and retain local portfolio snapshots. The older `make token-ui` Streamlit helper remains available for the legacy `:8501` redirect flow.
 
 When the React dashboard opens, it uses the backend to sync equity holdings, net positions, Coin mutual-fund holdings, and SIP schedules. You can run another read-only sync with **Sync Zerodha** or **Refresh**. A successful sync replaces the previous Zerodha snapshot; a failed sync keeps the last successful local snapshot and shows a redacted error. The UI uses the last prices returned by Kite and the NAV date returned for mutual funds; it does not call Kite's quote, WebSocket, or historical-candle APIs.
 

@@ -338,6 +338,17 @@ def save_zerodha_token(access_token: str, api_key: str | None = None) -> None:
         save_secret("zerodha_api_key", api_key)
 
 
+def save_zerodha_credentials(api_key: str, api_secret: str) -> None:
+    """Store Kite app credentials with the existing local secret storage abstraction."""
+    save_secret("zerodha_api_key", api_key.strip())
+    save_secret("zerodha_api_secret", api_secret.strip())
+
+
+def get_zerodha_credentials() -> dict[str, str]:
+    token = get_zerodha_token()
+    return {"api_key": token.get("api_key", ""), "api_secret": get_secret("zerodha_api_secret")}
+
+
 def get_zerodha_token() -> dict[str, str]:
     legacy_access = get_app_setting("zerodha_access_token")
     legacy_api_key = get_app_setting("zerodha_api_key")
@@ -352,6 +363,7 @@ def get_zerodha_token() -> dict[str, str]:
 def delete_zerodha_token() -> None:
     delete_secret("zerodha_access_token")
     delete_secret("zerodha_api_key")
+    delete_secret("zerodha_api_secret")
     with get_connection() as connection:
         connection.execute(
             "DELETE FROM app_settings WHERE key IN (?, ?)",

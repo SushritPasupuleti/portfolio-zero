@@ -63,8 +63,8 @@ Optional local Gemma analysis may summarize allocation, concentration, and chang
 | Frontend | React/Vite overview, holdings, separate editable manual ledger, source split, activity, AI review, glossary, saved settings, CSV controls, Zerodha sync, price provenance | Charts with text summaries, responsive/accessibility review |
 | API | FastAPI read-only Kite adapter, separate SQLite manual positions, CRUD/bulk edit/delete and CSV import/export APIs, Ollama review, gated yfinance price sync | Versioned migrations, snapshot history, richer provider recovery |
 | Python | `uv`, `pyproject.toml`, locked yfinance dependency, Docker build, Make targets | Application hardening and dependency maintenance |
-| Runtime | Docker Compose, loopback-bound ports, Vite API proxy, local Streamlit token UI | Health checks, persistent encrypted store, backup/restore, robust lifecycle/recovery |
-| Zerodha | `kiteconnect` dependency; local Streamlit token exchange/save UI; token status check; read-only Personal holdings/positions/MF/SIP sync | Verify live endpoint permissions and add richer partial-source recovery |
+| Runtime | Docker Compose, loopback-bound ports, Vite API proxy, React Kite token setup | Health checks, persistent encrypted store, backup/restore, robust lifecycle/recovery |
+| Zerodha | `kiteconnect` dependency; React login URL and redirect capture; FastAPI token exchange/save; token status check; read-only Personal holdings/positions/MF/SIP sync | Verify live endpoint permissions and add richer partial-source recovery |
 | Prices | Broker marks plus optional manual/automatic yfinance daily-close adapter for mapped Zerodha equities; source and date stored | Broader ISIN mapping, missing-symbol review, AMFI NAV fallback |
 | AI | Configurable local Ollama endpoint/model, installed-model discovery, grounded snapshot insight endpoint and UI | Review summary persistence/history, larger fixture/quality review |
 | Quality | API test cases exist for health, token status/save, imports, and summary | Run/expand checks for real adapters, storage security, calculations, and manual accessibility review |
@@ -149,7 +149,7 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 - [x] Add Docker Compose with services bound to loopback.
 - [x] Move Python dependency management to `uv`, `pyproject.toml`, and `uv.lock`.
 - [x] Add root/backend Makefiles and native run instructions.
-- [x] Add a local Streamlit token setup flow that obtains a request token, exchanges it with `kiteconnect`, and saves the API key/access token in SQLite.
+- [x] Add a local React token setup flow that obtains a request token, exchanges it with `kiteconnect` through FastAPI, and saves the API key/access token in the secret store.
 - [x] Add token-required API/UI state, SQLite-backed basic portfolio tables/endpoints, import preview/commit endpoints, and API test cases.
 - [x] Document local MLX/Ollama model profiles.
 - [x] Correct the app guidance to use Kite Personal and separate account data from market data.
@@ -162,8 +162,8 @@ Phases should proceed in order. Each phase ends with its acceptance criteria, an
 
 ### Phase 1 — Zerodha Personal authentication and first sync (highest priority)
 
-- [x] Provide a loopback Streamlit setup page that builds the Kite login URL, accepts the returned short-lived request token, exchanges it with the official SDK, and saves the resulting token locally. It currently uses the Personal app instructions.
-- [x] Keep the API key/access token out of the portfolio database and browser; store credentials through the local secret-store layer. Never expose the API secret/access token in React, browser storage, logs, URLs after exchange, or source control.
+- [x] Provide a React setup page that builds the Kite login URL, captures and removes the returned short-lived request token from the address bar, submits the API secret directly to a local FastAPI form handler, exchanges with the official SDK, and saves the resulting token locally.
+- [x] Store the API key/access token through the local secret-store layer, separate from portfolio rows. The API key is shown only as needed for the Kite login URL; never expose the API secret/access token to React state, browser storage, logs, post-exchange URLs, or source control.
 - [ ] Verify the user's Personal app can read profile/status, equity holdings, positions, Coin MF holdings, and SIPs. Record endpoint scopes separately from market data; do not expect quote, WebSocket, or historical-candle access.
 - [ ] Check permitted GET order/trade report capabilities and history depth for reconciliation; do not depend on short API history for long-term portfolio performance.
 - [x] Add a FastAPI Kite adapter for equity holdings, net positions, Coin MF holdings, and SIP reads; atomically replace the local broker snapshot only after all reads succeed.

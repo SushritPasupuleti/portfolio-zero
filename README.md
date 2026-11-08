@@ -4,7 +4,7 @@ A local-first, read-only portfolio dashboard. Zerodha Kite Connect Personal prov
 
 ## Current state
 
-The repository has a React dashboard, FastAPI API, SQLite storage, read-only Kite portfolio sync, a separate editable manual-position ledger, CSV import/export and bulk edits, portfolio summary/holdings/SIP/source/export endpoints, import preview/commit endpoints, and a Streamlit token setup UI. Settings include manual-import visibility, Catppuccin theme, Zerodha refresh behavior, local Ollama endpoint/model, and optional Yahoo price/news refresh. The UI also includes a source split, glossary, source activity, local AI portfolio review, and a portfolio news digest that can be summarized by the configured local model. Curated market RSS and Yahoo portfolio headlines are cached in SQLite with source-level refresh timing. AI reports are saved locally, browsable, and exportable as Markdown. Portfolio reports include a clearly labeled equal-weight rebalancing scenario with calculated unit counts when prices are recent enough. Yahoo access remains manually triggered and gated by saved preferences; RSS is independently enabled in Settings.
+The repository has a React dashboard, FastAPI API, SQLite storage, read-only Kite portfolio sync and token setup, a separate editable manual-position ledger, CSV import/export and bulk edits, portfolio summary/holdings/SIP/source/export endpoints, import preview/commit endpoints, and a legacy Streamlit token helper. Settings include manual-import visibility, Catppuccin theme, Zerodha refresh behavior, local Ollama endpoint/model, and optional Yahoo price/news refresh. The UI also includes a source split, glossary, source activity, local AI portfolio review, and a portfolio news digest that can be summarized by the configured local model. Curated market RSS and Yahoo portfolio headlines are cached in SQLite with source-level refresh timing. AI reports are saved locally, browsable, and exportable as Markdown. Portfolio reports include a clearly labeled equal-weight rebalancing scenario with calculated unit counts when prices are recent enough. Yahoo access remains manually triggered and gated by saved preferences; RSS is independently enabled in Settings.
 
 See the [detailed project plan](docs/project-plan.md) for the revised roadmap, [market-data source assessment](docs/market-data-sources.md) for the Personal/Yahoo distinction and data terms, and [news and AI reports](docs/news-and-ai.md) for RSS sources, SQLite caching, and report behavior.
 
@@ -14,7 +14,7 @@ For the separate non-Zerodha portfolio grid and CSV format, see the [manual port
 
 - React + Vite + TypeScript dashboard
 - FastAPI + SQLite, with Python dependencies managed by `uv`
-- Streamlit local-only token setup helper
+- React Kite login, callback capture, and local token exchange
 - shadcn/ui component patterns using Radix Slot, CVA, and shared class utilities
 - Docker Compose, with published web/API ports bound to loopback
 - Local AI target: MLX on Apple silicon or Ollama on an 8 GB laptop
@@ -68,13 +68,7 @@ make api
 make web
 ```
 
-Open <http://127.0.0.1:5173>. For the local Zerodha token setup page, run this in a third terminal:
-
-```sh
-make token-ui
-```
-
-Then open <http://127.0.0.1:8501>. Keep it on loopback. The token UI stores the API key and access token in the local secret store. Docker Compose mounts `backend/data` into the API container so the backend can read those local secrets and persist the portfolio snapshot.
+Open <http://127.0.0.1:5173>, then go to **Settings → Zerodha connection**. Save your Kite API key and secret once; they are stored in the local secret store and prefilled on later visits. The login URL is generated and shown automatically. Set the Kite Developer Console redirect URL to the exact URL shown in Settings (normally `http://127.0.0.1:5173/`). After sign-in, the callback request token is exchanged automatically, and only the expiring access token needs renewal. Docker Compose mounts `backend/data` into the API container so it can read those secrets and persist portfolio snapshots.
 
 Python dependencies live in `backend/pyproject.toml` and `backend/uv.lock`. Use `make -C backend lock` after changing them.
 
@@ -82,7 +76,7 @@ Python dependencies live in `backend/pyproject.toml` and `backend/uv.lock`. Use 
 
 Choose **Personal** in the Kite Developer Console for this single-user portfolio app. Personal provides access to account and portfolio APIs, including holdings/positions/funds, while excluding the separate live quote, WebSocket, and historical market-data products. Those are different capabilities; lack of live quotes does **not** mean the app cannot read your portfolio.
 
-The token UI obtains a daily access token. The React dashboard uses it through the backend for read-only portfolio sync. See the [Zerodha token setup guide](docs/zerodha-token-setup.md). No order placement or account mutation is implemented.
+The React dashboard obtains a daily access token through its local backend and uses it for read-only portfolio sync. See the [Zerodha token setup guide](docs/zerodha-token-setup.md). No order placement or account mutation is implemented.
 
 ## Stock prices and NAV
 
@@ -99,7 +93,7 @@ See [infra/llm-profiles.md](infra/llm-profiles.md) for Ollama setup. Gemma 4 pre
 | `make setup` | Sync Python dependencies and install frontend packages |
 | `make api` | Run FastAPI locally with reload |
 | `make web` | Run the Vite development server |
-| `make token-ui` | Run the loopback-only Zerodha token setup page |
+| `make token-ui` | Run the legacy loopback-only Streamlit token setup page |
 | `make dev` | Build and start Docker Compose |
 | `make dev-ai` | Start the app with the optional local Ollama service |
 | `make docker-down` | Stop Docker Compose |

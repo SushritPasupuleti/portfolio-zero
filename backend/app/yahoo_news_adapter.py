@@ -46,6 +46,72 @@ RSS_SOURCES: tuple[tuple[str, str], ...] = (
     ("Mint Markets", "https://www.livemint.com/rss/markets"),
 )
 
+# Broad coverage is fetched independently from portfolio-matched RSS, so an
+# idea report can discover themes and instruments not currently held.
+IDEA_RSS_SOURCES: tuple[tuple[str, str], ...] = (
+    ("Reuters Business", "https://feeds.reuters.com/reuters/businessNews"),
+    ("CNBC Markets", "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
+    ("MarketWatch Top Stories", "https://feeds.marketwatch.com/marketwatch/topstories/"),
+    ("Economic Times Markets", "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms"),
+    ("Moneycontrol Market Reports", "https://www.moneycontrol.com/rss/marketreports.xml"),
+)
+
+
+def sync_idea_news(lookback_hours: int, max_articles: int) -> dict[str, object]:
+    """Fetch broad market RSS stories without requiring a matching portfolio ticker."""
+    collected: dict[str, dict[str, object]] = {}
+    refreshed: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+    for source_name, source_url in IDEA_RSS_SOURCES:
+        source_key = f"ideas-rss:{source_name.casefold()}"
+        if news_source_is_fresh(source_key, 30):
+            skipped.append(source_name)
+            continue
+        try:
+            items = _fetch_rss_feed(source_name, source_url)
+            for item in items:
+                item["ticker"] = "MARKET"
+                item["instrument_name"] = "Broad market"
+                item["asset_type"] = "market_news"
+                item["source_key"] = source_key
+            _merge_articles(collected, items)
+            mark_news_source_fetched(source_key)
+            refreshed.append(source_name)
+        except (httpx.HTTPError, ElementTree.ParseError, ValueError) as exc:
+            errors.append(f"{source_name}: {type(exc).__name__}")
+        time.sleep(0.15)
+    saved = upsert_news_articles(list(collected.values())) if collected else 0
+    prune_news_articles(retention_days=30)
+    articles = _get_idea_articles(lookback_hours, max_articles)
+    if errors and not refreshed and not skipped:
+        message = "Broader market news could not be refreshed; the saved cache was kept."
+    else:
+        message = f"Saved or updated {saved} broader market stories. Refreshed {len(refreshed)} source(s)."
+    return {"items": articles, "message": message, "refreshed_sources": refreshed,
+            "cached_sources": skipped, "errors": errors}
+
+
+def _get_idea_articles(lookback_hours: int, max_articles: int) -> list[dict[str, object]]:
+    from datetime import timedelta
+    from .storage import get_connection
+    cutoff = (datetime.now(UTC) - timedelta(hours=lookback_hours)).isoformat()
+    with get_connection() as connection:
+        rows = connection.execute(
+            """SELECT * FROM news_articles WHERE source_key LIKE 'ideas-rss:%'
+               AND COALESCE(published_at, fetched_at) >= ?
+               ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT ?""",
+            (cutoff, max_articles),
+        ).fetchall()
+    items = []
+    import json
+    for row in rows:
+        item = dict(row)
+        try: item["related_tickers"] = json.loads(item.get("related_tickers") or "[]")
+        except (TypeError, ValueError): item["related_tickers"] = []
+        items.append(item)
+    return items
+
 
 def sync_portfolio_news(
     include_manual: bool,

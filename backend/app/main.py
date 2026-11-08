@@ -4,9 +4,10 @@ from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from kiteconnect import KiteConnect
 from kiteconnect.exceptions import (
     KiteException,
     NetworkException,
@@ -18,6 +19,7 @@ from .kite_adapter import SOURCE_NAME, SOURCE_TYPE, sync_portfolio
 from .models import (
     Holding,
     ImportPreviewRequest,
+    KiteLoginUrlRequest,
     ManualPositionBulkEdit,
     ManualPositionIds,
     ManualPositionImport,
@@ -28,8 +30,10 @@ from .models import (
 )
 from .ollama_adapter import (
     OllamaUnavailable,
+    generate_ideas_report,
     generate_news_report,
     generate_portfolio_insights,
+    generate_typed_portfolio_report,
     installed_models,
     validate_ollama_endpoint,
 )
@@ -47,6 +51,7 @@ from .storage import (
     get_sips,
     get_sources,
     get_zerodha_token,
+    get_zerodha_credentials,
     import_manual_positions,
     initialize_db,
     insert_import_record,
@@ -61,11 +66,12 @@ from .storage import (
     save_manual_sip_schedule,
     save_preferences,
     save_zerodha_token,
+    save_zerodha_credentials,
     set_manual_sip_enabled,
     set_manual_sip_entry_status,
     upsert_source_status,
 )
-from .yahoo_news_adapter import NEWS_SOURCE_TYPE, sync_portfolio_news
+from .yahoo_news_adapter import NEWS_SOURCE_TYPE, sync_idea_news, sync_portfolio_news
 from .yfinance_adapter import sync_daily_prices
 
 
@@ -96,6 +102,11 @@ def _finalize_ai_report(
     )
     metadata: dict[str, object] = {
         "report_type": report_type,
+        "report_purpose": str(report.get("scope") or report_type),
+        "input_holding_names": [holding.instrument_name for holding in holdings[:200]],
+        "input_tickers": [holding.symbol for holding in holdings[:200] if holding.symbol],
+        "input_news_ids": [str(article.get("id")) for article in articles[:150] if article.get("id")],
+        "prompt_version": "2026-11-08",
         "model": report.get("model"),
         "local_endpoint": preferences.ollama_endpoint,
         "model_completed_at_utc": report.get("generated_at"),
@@ -199,11 +210,80 @@ def token_status() -> dict[str, object]:
         "configured": False,
         "state": "not_configured",
         "message": (
-            "Zerodha Personal access token is missing. Open the internal "
-            "Streamlit setup page to create a fresh local token."
+            "Zerodha Personal access token is missing. Open Settings in the React dashboard "
+            "to complete the local Kite login and save a fresh token."
         ),
-        "api_key": False,
+        "api_key": bool(token.get("api_key")),
     }
+
+
+@app.post("/api/token/login-url")
+def token_login_url(payload: KiteLoginUrlRequest) -> dict[str, str]:
+    api_key = payload.api_key.strip()
+    if not api_key:
+        raise HTTPException(status_code=422, detail="Enter your Kite API key first.")
+    return {"login_url": KiteConnect(api_key=api_key).login_url()}
+
+
+@app.get("/api/token/credentials")
+def token_credentials() -> dict[str, object]:
+    credentials = get_zerodha_credentials()
+    return {"api_key": credentials["api_key"], "api_secret": credentials["api_secret"],
+            "configured": bool(credentials["api_key"] and credentials["api_secret"])}
+
+
+@app.put("/api/token/credentials")
+def save_token_credentials(payload: dict[str, str]) -> dict[str, bool]:
+    api_key = (payload.get("api_key") or "").strip()
+    api_secret = (payload.get("api_secret") or "").strip()
+    if not api_key or not api_secret:
+        raise HTTPException(status_code=422, detail="Both Kite API key and API secret are required.")
+    save_zerodha_credentials(api_key, api_secret)
+    return {"configured": True}
+
+
+@app.post("/api/token/exchange")
+async def exchange_kite_request_token(request: Request) -> dict[str, bool]:
+    # Read the regular browser form body directly; the API secret never enters React state.
+    from urllib.parse import parse_qs
+
+    form = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
+    request_token = (form.get("request_token", [""])[0]).strip()
+    credentials = get_zerodha_credentials()
+    api_key, api_secret = credentials["api_key"], credentials["api_secret"]
+    if not api_key or not api_secret or not request_token:
+        raise HTTPException(status_code=409, detail="Save your Kite API key and secret in Settings first.")
+    try:
+        session = KiteConnect(api_key=api_key).generate_session(
+            request_token,
+            api_secret=api_secret,
+        )
+    except Exception as exc:
+        message = str(exc)
+        lower = message.lower()
+        if "user is not enabled for the app" in lower:
+            message = (
+                "Kite did not enable the account signed into the browser for this app. "
+                "Check that the app's Zerodha Client ID exactly matches the account you "
+                "authorize, and use the API key from that same app. If you use multiple "
+                "accounts, sign out of Kite and retry with the linked account. This is an "
+                "account/app binding issue; Personal app market-data limits are unrelated."
+            )
+        elif "invalid request token" in lower or "request token" in lower:
+            message = (
+                "The request token is expired, already used, or from another login flow. "
+                "Generate a new Kite login URL and sign in again."
+            )
+        elif "api key" in lower or "api secret" in lower:
+            message = "The API key or API secret does not match this Kite app. Check both values."
+        else:
+            message = "Kite token exchange failed. Check the API key, API secret, and request-token freshness, then retry."
+        raise HTTPException(status_code=401, detail=message) from exc
+    access_token = session.get("access_token")
+    if not access_token:
+        raise HTTPException(status_code=502, detail="Kite did not return an access token.")
+    save_zerodha_token(access_token, api_key)
+    return {"saved": True}
 
 
 @app.get("/api/connection/status")
@@ -352,10 +432,46 @@ def ai_news_report() -> dict[str, object]:
 
 @app.get("/api/ai/reports")
 def ai_reports(
-    report_type: str | None = Query(default=None, pattern="^(portfolio|news)$"),
+    report_type: str | None = Query(default=None, pattern="^(portfolio|news|ideas|risk|diversification|funds)$"),
     limit: int = Query(default=100, ge=1, le=250),
 ) -> dict[str, object]:
     return {"items": list_ai_reports(report_type=report_type, limit=limit)}
+
+
+@app.post("/api/ai/ideas-report")
+def ai_ideas_report() -> dict[str, object]:
+    preferences = get_preferences()
+    if not preferences.ollama_enabled:
+        raise HTTPException(status_code=409, detail="Enable local AI insights in Settings before generating a research ideas report.")
+    result = sync_idea_news(preferences.news_lookback_hours, preferences.news_max_articles)
+    articles = result["items"]
+    holdings = get_holdings(include_manual=preferences.show_manual_imports)
+    try:
+        report = generate_ideas_report(preferences.ollama_endpoint, preferences.ollama_model, articles, holdings)
+        return _finalize_ai_report(report, "ideas", preferences, holdings, articles)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OllamaUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/ai/{report_type}-report")
+def ai_typed_portfolio_report(report_type: str) -> dict[str, object]:
+    if report_type not in {"risk", "diversification", "funds"}:
+        raise HTTPException(status_code=404, detail="This report type is not available.")
+    preferences = get_preferences()
+    if not preferences.ollama_enabled:
+        raise HTTPException(status_code=409, detail="Enable local AI insights in Settings before generating a report.")
+    holdings = get_holdings(include_manual=preferences.show_manual_imports)
+    articles = get_news_articles(preferences.news_lookback_hours, preferences.news_max_articles)
+    try:
+        report = generate_typed_portfolio_report(preferences.ollama_endpoint, preferences.ollama_model,
+                                                 report_type, holdings, articles)
+        return _finalize_ai_report(report, report_type, preferences, holdings, articles)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except OllamaUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/api/ai/reports/{report_id}")
@@ -437,7 +553,7 @@ def sync_zerodha_portfolio() -> dict[str, int | str]:
             status_code=409,
             detail=(
                 "A Zerodha API key and access token are required. "
-                "Complete setup in the local token UI."
+                "Complete the Kite setup in the React dashboard Settings."
             ),
         )
 
@@ -446,7 +562,7 @@ def sync_zerodha_portfolio() -> dict[str, int | str]:
     except TokenException as exc:
         message = (
             "The saved Kite access token is expired or invalid. "
-            "Generate a fresh token in the local setup UI."
+            "Generate a fresh token in the React dashboard Settings."
         )
         upsert_source_status(
             SOURCE_NAME,
@@ -523,8 +639,8 @@ def portfolio_summary() -> dict:
             "as_of": None,
             "status": "token_required",
             "warnings": [
-                "Zerodha access token is not configured yet. Use the internal "
-                "Streamlit UI to generate and save it."
+                "Zerodha access token is not configured yet. Use React dashboard Settings "
+                "to generate and save it."
             ],
             "message": "Setup required",
         }

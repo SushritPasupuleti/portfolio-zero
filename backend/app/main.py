@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ from .models import (
     ManualSipEntryStatus,
     ManualSipScheduleInput,
     NpsAccountInput,
+    ForecastOptions,
     Preferences,
 )
 from .ollama_adapter import (
@@ -84,6 +86,7 @@ def _finalize_ai_report(
     preferences: Preferences,
     holdings: list[Holding],
     articles: list[dict[str, object]],
+    forecast_options: ForecastOptions | None = None,
 ) -> dict[str, object]:
     captured_at = datetime.now(UTC).isoformat()
     source_counts = dict(sorted(Counter(
@@ -131,7 +134,14 @@ def _finalize_ai_report(
         "news_lookback_hours": preferences.news_lookback_hours,
         "news_article_limit": preferences.news_max_articles,
     }
-    report["markdown"] = f"{report['markdown'].rstrip()}\n\n{_run_metadata_markdown(metadata)}"
+    forecast_markdown = ""
+    if forecast_options:
+        forecast = _build_report_forecast(holdings, forecast_options)
+        metadata["forecast_assumptions"] = forecast["assumptions"]
+        metadata["forecast_currency_totals"] = forecast["currency_totals"]
+        if forecast["rows"]:
+            forecast_markdown = f"\n\n{_report_forecast_markdown(forecast)}"
+    report["markdown"] = f"{report['markdown'].rstrip()}{forecast_markdown}\n\n{_run_metadata_markdown(metadata)}"
     saved = save_ai_report(
         report_type,
         str(report["model"]),
@@ -141,6 +151,104 @@ def _finalize_ai_report(
         metadata,
     )
     return {**report, **saved}
+
+
+def _build_report_forecast(
+    holdings: list[Holding], options: ForecastOptions,
+) -> dict[str, object]:
+    """Calculate transparent, currency-separated scenarios without forecasting prices."""
+    inflation = options.inflation_rate_percent / 100
+    inflation_factor = (1 + inflation) ** options.years
+    buckets: dict[tuple[str, str], dict[str, float]] = {}
+    for holding in holdings:
+        if holding.value is None or holding.value <= 0:
+            continue
+        currency = (holding.currency or "INR").upper()
+        asset_class = holding.asset_class or "other"
+        annual = options.annual_return_percent_by_asset_class.get(
+            asset_class, options.annual_return_percent_by_asset_class.get("other", 5.0)
+        ) / 100
+        key = (currency, asset_class)
+        bucket = buckets.setdefault(key, {
+            "current": 0.0, "nominal": 0.0, "today": 0.0,
+            "low": 0.0, "high": 0.0,
+        })
+        current = float(holding.value)
+        bucket["current"] += current
+        bucket["nominal"] += current * (1 + annual) ** options.years
+        bucket["today"] += current * (1 + annual) ** options.years / inflation_factor
+        bucket["low"] += current * (1 + max(-1.0, annual - 0.02)) ** options.years
+        bucket["high"] += current * (1 + min(1.0, annual + 0.02)) ** options.years
+
+    rows: list[dict[str, object]] = []
+    currency_totals: dict[str, dict[str, float]] = {}
+    for (currency, asset_class), values in sorted(buckets.items()):
+        current = values["current"]
+        today = values["today"]
+        annual_real = ((today / current) ** (1 / options.years) - 1) * 100 if today > 0 else -100.0
+        rows.append({"currency": currency, "asset_class": asset_class, **values,
+                     "real_annual_return_percent": annual_real})
+        total = currency_totals.setdefault(currency, {
+            "current": 0.0, "nominal": 0.0, "today": 0.0,
+            "low": 0.0, "high": 0.0,
+        })
+        for key, value in values.items():
+            total[key] += value
+    return {
+        "assumptions": {
+            "years": options.years,
+            "inflation_rate_percent": options.inflation_rate_percent,
+            "cumulative_inflation_percent": (inflation_factor - 1) * 100,
+            "annual_return_percent_by_asset_class": options.annual_return_percent_by_asset_class,
+            "sensitivity_band_percentage_points": 2,
+            "new_contributions_included": False,
+        },
+        "rows": rows,
+        "currency_totals": currency_totals,
+    }
+
+
+def _report_forecast_markdown(forecast: dict[str, object]) -> str:
+    assumptions = forecast["assumptions"]
+    years = int(assumptions["years"])
+    inflation = float(assumptions["inflation_rate_percent"])
+    rows = [
+        "## Forward projection",
+        "",
+        f"Illustrative values compounded for {years} years. The scenarios use constant {inflation:.1f}% annual inflation ({assumptions['cumulative_inflation_percent']:.1f}% cumulative). Sensitivity ranges use nominal returns 2 percentage points below/above the base assumption. New contributions, taxes, fees, and withdrawals are excluded. Currencies are shown separately and are not converted.",
+        "",
+        "### Nominal projection",
+        "",
+        "Future values before adjusting for inflation.",
+        "",
+        "| Currency | Asset class | Current value | Nominal value in future | Sensitivity range |",
+        "| --- | --- | ---: | ---: | ---: |",
+    ]
+    for row in forecast["rows"]:
+        currency = row["currency"]
+        rows.append(
+            f"| {currency} | {row['asset_class'].replace('_', ' ')} | {row['current']:,.2f} {currency} | "
+            f"{row['nominal']:,.2f} {currency} | {row['low']:,.2f}–{row['high']:,.2f} {currency} |"
+        )
+    rows.extend([
+        "",
+        "### Inflation-adjusted projection — values in today's purchasing power",
+        "",
+        f"This separate view converts the nominal future scenario into today's money using {inflation:.1f}% annual inflation. These figures are the estimated purchasing power of the future value, not its future account balance.",
+        "",
+        "| Currency | Asset class | Current value | Inflation-adjusted value in today's money | Real annualized return |",
+        "| --- | --- | ---: | ---: | ---: |",
+    ])
+    for row in forecast["rows"]:
+        currency = row["currency"]
+        rows.append(
+            f"| {currency} | {row['asset_class'].replace('_', ' ')} | {row['current']:,.2f} {currency} | "
+            f"{row['today']:,.2f} {currency} | {row['real_annual_return_percent']:.2f}% |"
+        )
+    rows.extend(["", "### Assumptions used", "", "| Asset class | Nominal annual return |", "| --- | ---: |"])
+    for asset_class, rate in sorted(assumptions["annual_return_percent_by_asset_class"].items()):
+        rows.append(f"| {asset_class.replace('_', ' ')} | {rate:.2f}% |")
+    return "\n".join(rows)
 
 
 def _run_metadata_markdown(metadata: dict[str, object]) -> str:
@@ -159,11 +267,15 @@ def _run_metadata_markdown(metadata: dict[str, object]) -> str:
         "news_sources": "News sources",
         "news_lookback_hours": "News lookback (hours)",
         "news_article_limit": "Configured article limit",
+        "forecast_assumptions": "Projection assumptions",
+        "forecast_currency_totals": "Projected totals by currency",
     }
     rows = ["## Run metadata", "", "| Field | Value |", "| --- | --- |"]
     for key, label in labels.items():
         value = metadata.get(key)
-        if isinstance(value, dict):
+        if isinstance(value, dict) and any(isinstance(item, dict) for item in value.values()):
+            rendered = json.dumps(value, sort_keys=True)
+        elif isinstance(value, dict):
             rendered = ", ".join(f"{name} ({count})" for name, count in value.items())
             rendered = rendered or "None recorded"
         else:
@@ -382,7 +494,7 @@ def ollama_models(endpoint: str | None = None) -> dict[str, object]:
 
 
 @app.post("/api/ai/recommendations")
-def portfolio_recommendations() -> dict[str, object]:
+def portfolio_recommendations(payload: ForecastOptions | None = None) -> dict[str, object]:
     preferences = get_preferences()
     if not preferences.ollama_enabled:
         raise HTTPException(
@@ -401,7 +513,8 @@ def portfolio_recommendations() -> dict[str, object]:
             holdings,
             articles,
         )
-        return _finalize_ai_report(report, "portfolio", preferences, holdings, articles)
+        return _finalize_ai_report(report, "portfolio", preferences, holdings, articles,
+                                   payload or ForecastOptions())
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OllamaUnavailable as exc:
@@ -409,7 +522,7 @@ def portfolio_recommendations() -> dict[str, object]:
 
 
 @app.post("/api/ai/news-report")
-def ai_news_report() -> dict[str, object]:
+def ai_news_report(payload: ForecastOptions | None = None) -> dict[str, object]:
     preferences = get_preferences()
     if not preferences.ollama_enabled:
         raise HTTPException(
@@ -426,7 +539,8 @@ def ai_news_report() -> dict[str, object]:
             preferences.ollama_model,
             articles,
         )
-        return _finalize_ai_report(report, "news", preferences, [], articles)
+        return _finalize_ai_report(report, "news", preferences, [], articles,
+                                   payload or ForecastOptions())
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OllamaUnavailable as exc:
@@ -442,7 +556,7 @@ def ai_reports(
 
 
 @app.post("/api/ai/ideas-report")
-def ai_ideas_report() -> dict[str, object]:
+def ai_ideas_report(payload: ForecastOptions | None = None) -> dict[str, object]:
     preferences = get_preferences()
     if not preferences.ollama_enabled:
         raise HTTPException(status_code=409, detail="Enable local AI insights in Settings before generating a research ideas report.")
@@ -451,7 +565,8 @@ def ai_ideas_report() -> dict[str, object]:
     holdings = get_holdings(include_manual=preferences.show_manual_imports)
     try:
         report = generate_ideas_report(preferences.ollama_endpoint, preferences.ollama_model, articles, holdings)
-        return _finalize_ai_report(report, "ideas", preferences, holdings, articles)
+        return _finalize_ai_report(report, "ideas", preferences, holdings, articles,
+                                   payload or ForecastOptions())
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OllamaUnavailable as exc:
@@ -459,7 +574,7 @@ def ai_ideas_report() -> dict[str, object]:
 
 
 @app.post("/api/ai/{report_type}-report")
-def ai_typed_portfolio_report(report_type: str) -> dict[str, object]:
+def ai_typed_portfolio_report(report_type: str, payload: ForecastOptions | None = None) -> dict[str, object]:
     if report_type not in {"risk", "diversification", "funds"}:
         raise HTTPException(status_code=404, detail="This report type is not available.")
     preferences = get_preferences()
@@ -470,7 +585,8 @@ def ai_typed_portfolio_report(report_type: str) -> dict[str, object]:
     try:
         report = generate_typed_portfolio_report(preferences.ollama_endpoint, preferences.ollama_model,
                                                  report_type, holdings, articles)
-        return _finalize_ai_report(report, report_type, preferences, holdings, articles)
+        return _finalize_ai_report(report, report_type, preferences, holdings, articles,
+                                   payload or ForecastOptions())
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except OllamaUnavailable as exc:

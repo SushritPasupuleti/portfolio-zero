@@ -52,6 +52,24 @@ class Holding(BaseModel):
     as_of: datetime | None = None
 
 
+class ForecastOptions(BaseModel):
+    """Transparent assumptions for the deterministic report projection appendix."""
+
+    years: int = Field(default=10, ge=1, le=40)
+    inflation_rate_percent: float = Field(default=5.0, ge=0, le=30)
+    annual_return_percent_by_asset_class: dict[str, float] = Field(default_factory=lambda: {
+        "equity": 10, "mutual_fund": 10, "etf": 9, "bond": 6, "other": 5,
+        "equity_position": 10, "derivative_position": 0, "nps": 10,
+    })
+
+    @field_validator("annual_return_percent_by_asset_class")
+    @classmethod
+    def validate_return_assumptions(cls, value: dict[str, float]) -> dict[str, float]:
+        if any(not -100 <= rate <= 100 for rate in value.values()):
+            raise ValueError("Annual return assumptions must be between -100% and 100%.")
+        return value
+
+
 class Sip(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
